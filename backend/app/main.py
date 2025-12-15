@@ -5,7 +5,7 @@
 - Search using cosine similarity
 - Demo-mode flag and simulated latency
 """
-from quart import Quart, request, jsonify, Response
+from quart import Quart, request, jsonify, Response, render_template, send_from_directory
 from quart_cors import cors
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -55,7 +55,7 @@ except Exception:
         qmodels = None
     HAS_QDRANT = False
 
-app = Quart(__name__)
+app = Quart(__name__, template_folder='../templates', static_folder='../static')
 app = cors(app, allow_origin="*")
 
 # In-memory store (for demo or fallback)
@@ -190,6 +190,11 @@ async def health():
     return jsonify({"status": "ok", "demo": settings.demo, "qdrant": bool(QDRANT_CLIENT)})
 
 
+@app.route('/')
+async def index():
+    return await render_template('index.html')
+
+
 @app.route('/upload', methods=['POST'])
 async def upload_file():
     # Accept either multipart file uploads or JSON with 'text' and optional 'filename'
@@ -260,6 +265,34 @@ async def list_documents():
     return jsonify(docs)
 
 
+@app.route('/document/<doc_id>')
+async def get_document(doc_id):
+    if settings.demo or not QDRANT_CLIENT:
+        doc = next((d for d in DOCUMENTS if d["id"] == doc_id), None)
+        if not doc:
+            return jsonify({"error": "document not found"}), 404
+        return jsonify({"id": doc["id"], "filename": doc["filename"], "text": doc["text"], "chunks": len(doc["chunks"])})
+    # From Qdrant, get all points with that doc_id? Wait, doc_id is not stored.
+    # Actually, since points have payload with filename, but not doc_id.
+    # In demo, doc_id is generated, but in Qdrant, points have id as uuid, payload filename.
+    # To get full document, perhaps need to store full text in payload or something.
+    # For now, return points for that filename.
+    # But filename may not be unique.
+    # For simplicity, since demo, and Qdrant, perhaps return the chunks.
+    res, _ = QDRANT_CLIENT.scroll(collection_name=settings.qdrant_collection, limit=1000)
+    chunks = []
+    for hit in res or []:
+        payload = hit.payload or {}
+        if payload.get('filename') == doc_id:  # assuming doc_id is filename for now
+            chunks.append({"text": payload.get('text', ''), "chunk_index": payload.get('chunk_index', 0)})
+    if not chunks:
+        return jsonify({"error": "document not found"}), 404
+    # Reconstruct text
+    chunks.sort(key=lambda x: x['chunk_index'])
+    full_text = '\n'.join(c['text'] for c in chunks)
+    return jsonify({"id": doc_id, "filename": doc_id, "text": full_text, "chunks": len(chunks)})
+
+
 @app.route('/search', methods=['POST'])
 async def search():
     payload = await request.get_json()
@@ -295,12 +328,12 @@ async def search():
         # Use Qdrant search
         search_res = QDRANT_CLIENT.query_points(collection_name=settings.qdrant_collection, query=q_emb, limit=top_k)
         for hit in search_res:
-            payload = hit.payload or {}
+            payload = hit.payload or {}  # type: ignore
             score = getattr(hit, 'score', None)
             # Qdrant might return different score field names; normalize
             s = float(score) if score is not None else 0.0
             results.append({
-                'doc_id': hit.id,
+                'doc_id': hit.id,  # type: ignore
                 'filename': payload.get('filename', 'unknown'),
                 'chunk_text': (payload.get('text', '')[:400] + ('...' if len(payload.get('text', '')) > 400 else '')),
                 'score': s,
@@ -327,10 +360,38 @@ async def reset_store():
     if QDRANT_CLIENT and not settings.demo:
         try:
             # delete all points in collection (careful in prod)
-            QDRANT_CLIENT.delete(collection_name=settings.qdrant_collection, filter={})
+            QDRANT_CLIENT.delete(collection_name=settings.qdrant_collection, points_selector=qmodels.Filter(must=[]))
         except Exception:
             log.exception('Failed to clear Qdrant collection')
     return jsonify({"status": "cleared"})
+
+
+@app.route('/document/<doc_id>', methods=['DELETE'])
+async def delete_document(doc_id):
+    # Admin auth required
+    if settings.admin_token:
+        auth = request.headers.get('Authorization', '')
+        if not auth.startswith('Bearer '):
+            return jsonify({'error': 'unauthorized'}), 401
+        token = auth.split(' ', 1)[1].strip()
+        if token != settings.admin_token:
+            return jsonify({'error': 'unauthorized'}), 401
+
+    if settings.demo or not QDRANT_CLIENT:
+        # Remove from DOCUMENTS
+        DOCUMENTS[:] = [d for d in DOCUMENTS if d["id"] != doc_id]
+        return jsonify({"status": "deleted"})
+    # From Qdrant, delete points with matching filename
+    # But since filename may not be unique, and doc_id is not stored, assume doc_id is filename
+    try:
+        QDRANT_CLIENT.delete(
+            collection_name=settings.qdrant_collection,
+            points_selector=qmodels.Filter(must=[qmodels.FieldCondition(key="filename", match=qmodels.MatchValue(value=doc_id))])
+        )
+        return jsonify({"status": "deleted"})
+    except Exception as e:
+        log.exception('Failed to delete document')
+        return jsonify({"error": "failed to delete"}), 500
 
 
 async def _startup_connect_qdrant():
@@ -356,5 +417,4 @@ async def _on_startup():
     await _startup_connect_qdrant()
 
 if __name__ == '__main__':
-    import uvicorn
-    uvicorn.run('app.main:app', host='127.0.0.1', port=8000, reload=True)
+    app.run(host='127.0.0.1', port=8002, debug=True)

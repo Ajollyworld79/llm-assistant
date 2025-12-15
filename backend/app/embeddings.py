@@ -123,6 +123,8 @@ async def embed_texts_fastembed(texts: List[str]) -> List[List[float]]:
         vecs = _normalize_vectors(out)
         if vecs:
             return vecs
+        else:
+            raise RuntimeError('FastEmbed returned empty embeddings')
     except Exception as e:
         log.debug('FastEmbed embedding failed: %s', e)
         raise RuntimeError('FastEmbed embedding failed') from e

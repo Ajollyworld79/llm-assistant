@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qdrant Chatbot — Demo Mode</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="app">
+        <header>
+            <h1>🤖 Qdrant Chatbot — Demo Mode</h1>
+            <nav>
+            <button onclick="setView('chat')" id="chat-btn" class="active">💬 Chat</button>
+            <button onclick="setView('admin')" id="admin-btn">⚙️ Admin</button>
+            </nav>
+        </header>
+        <main>
+            <div id="chat-view" class="view">
+                <div class="banner">Demo mode — results are simulated; no active LLM connection.</div>
+                <div class="chat-history" id="chat-history"></div>
+                <div class="input-area">
+                    <textarea id="query-input" placeholder="Type your query..." onkeypress="handleKeyPress(event)"></textarea>
+                    <button onclick="doSearch()" id="send-btn">Send</button>
+                </div>
+            </div>
+            <div id="admin-view" class="view" style="display:none;">
+                <h2>📁 Upload Documents</h2>
+                <div>
+                    <label>Admin token: </label>
+                    <input id="token-input" value="" placeholder="Enter admin token" />
+                    <button onclick="saveToken()">Save token</button>
+                </div>
+                <div class="drop-zone" ondrop="handleDrop(event)" ondragover="handleDragOver(event)">
+                    <p>📎 Drag and drop files here or click to select</p>
+                    <input type="file" id="file-input" multiple onchange="handleFileSelect(event)" />
+                </div>
+                <p id="file-names"></p>
+                <button onclick="upload()" id="upload-btn">Upload</button>
+                <span id="upload-status"></span>
+                <h3>📋 Documents</h3>
+                <ul id="docs-list"></ul>
+            </div>
+        </main>
+    </div>
+
+    <div id="modal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3 id="modal-title"></h3>
+            <pre id="modal-text"></pre>
+            <button onclick="closeModal()">Close</button>
+        </div>
+    </div>
+
+    <script>
+        const BASE = '';
+        let view = 'chat';
+        let messages = [];
+        let files = [];
+        let token = localStorage.getItem('admin_token') || '';
+
+        document.getElementById('token-input').value = token;
+
+        function setView(newView) {
+            view = newView;
+            document.getElementById('chat-view').style.display = view === 'chat' ? 'block' : 'none';
+            document.getElementById('admin-view').style.display = view === 'admin' ? 'block' : 'none';
+            document.getElementById('chat-btn').classList.toggle('active', view === 'chat');
+            document.getElementById('admin-btn').classList.toggle('active', view === 'admin');
+            if (view === 'admin') refreshDocs();
+        }
+
+        async function doSearch() {
+            const query = document.getElementById('query-input').value.trim();
+            if (!query) return;
+            messages.push({type: 'user', content: query});
+            renderChat();
+            document.getElementById('query-input').value = '';
+            document.getElementById('send-btn').disabled = true;
+
+            try {
+                const res = await fetch(BASE + '/search', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query, top_k:5})});
+                const js = await res.json();
+                messages.push({type: 'bot', content: 'Here are the search results:', results: js.results || []});
+            } catch (e) {
+                messages.push({type: 'bot', content: 'Error: ' + e.message});
+            }
+            renderChat();
+            document.getElementById('send-btn').disabled = false;
+        }
+
+        function renderChat() {
+            const history = document.getElementById('chat-history');
+            history.innerHTML = messages.map(msg => `
+                <div class="message ${msg.type}">
+                    <strong>${msg.type === 'user' ? 'You' : 'Bot'}:</strong> ${msg.content}
+                    ${msg.results ? '<div class="results">' + msg.results.map(r => `
+                        <div class="result">
+                            <strong>${r.filename}</strong>
+                            <div class="snippet">${r.chunk_text}</div>
+                            <div class="score">score: ${r.score.toFixed(3)}</div>
+                            <button onclick="viewFull('${r.filename}')">View Full Document</button>
+                        </div>
+                    `).join('') + '</div>' : ''}
+                </div>
+            `).join('');
+            if (loading) {
+                history.innerHTML += '<div class="message bot"><em>🔄 Searching...</em></div>';
+            }
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                doSearch();
+            }
+        }
+
+        async function viewFull(filename) {
+            try {
+                const res = await fetch(BASE + `/document/${filename}`);
+                const js = await res.json();
+                document.getElementById('modal-title').textContent = js.filename;
+                document.getElementById('modal-text').textContent = js.text;
+                document.getElementById('modal').style.display = 'flex';
+            } catch (e) {
+                alert('Error loading document');
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('modal').style.display = 'none';
+        }
+
+        function saveToken() {
+            token = document.getElementById('token-input').value;
+            localStorage.setItem('admin_token', token);
+            alert('Saved token locally');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            files = Array.from(e.dataTransfer.files);
+            updateFileNames();
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+        }
+
+        function handleFileSelect(e) {
+            files = Array.from(e.target.files);
+            updateFileNames();
+        }
+
+        function updateFileNames() {
+            document.getElementById('file-names').textContent = files.length ? 'Selected: ' + files.map(f => f.name).join(', ') : '';
+        }
+
+        async function upload() {
+            if (files.length === 0) return alert('Choose files');
+            document.getElementById('upload-btn').disabled = true;
+            document.getElementById('upload-status').textContent = 'Uploading...';
+            for (let file of files) {
+                const fd = new FormData();
+                fd.append('file', file);
+                const headers = {};
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+                try {
+                    const res = await fetch(BASE + '/upload', {method:'POST', body:fd, headers});
+                    const js = await res.json();
+                    if (res.status === 401) {
+                        document.getElementById('upload-status').textContent = 'Unauthorized - check admin token';
+                        break;
+                    }
+                    document.getElementById('upload-status').textContent = `Uploaded: ${js.filename}`;
+                } catch (e) {
+                    document.getElementById('upload-status').textContent = `Error uploading ${file.name}`;
+                }
+            }
+            document.getElementById('upload-btn').disabled = false;
+            files = [];
+            updateFileNames();
+            refreshDocs();
+        }
+
+        async function refreshDocs() {
+            try {
+                const res = await fetch(BASE + '/documents');
+                const docs = await res.json();
+                const list = document.getElementById('docs-list');
+                list.innerHTML = docs.map(d => `<li>${d.filename} — ${d.chunks} chunks <button onclick="deleteDoc('${d.id}')">Delete</button></li>`).join('');
+            } catch (e) {
+                console.error('Error refreshing docs', e);
+            }
+        }
+
+        async function deleteDoc(docId) {
+            const headers = {};
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            const res = await fetch(BASE + `/document/${docId}`, {method:'DELETE', headers});
+            if (res.status === 401) return alert('Unauthorized');
+            if (res.ok) refreshDocs();
+            else alert('Failed to delete');
+        }
+
+        // Initial load
+        refreshDocs();
+    </script>
+</body>
+</html>
