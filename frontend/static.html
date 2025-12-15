@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Qdrant Chatbot — Static Demo</title>
+    <style>
+      body{font-family:Inter,system-ui,Arial;margin:20px;color:#111}
+      .container{max-width:900px;margin:0 auto}
+      textarea{width:100%;min-height:80px}
+      .results{border-top:1px solid #ddd;padding-top:1rem}
+      .banner{background:#fffae6;padding:0.5rem;border:1px solid #ffd54a;margin-bottom:1rem}
+      .spinner{display:inline-block;width:18px;height:18px;border:2px solid #ccc;border-top-color:#333;border-radius:50%;animation:spin 1s linear infinite}
+      @keyframes spin{to{transform:rotate(360deg)}}
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Qdrant Chatbot — Static Demo</h1>
+      <div class="banner">Demo mode — results are simulated; no active LLM connection.</div>
+
+      <h2>Chat</h2>
+      <textarea id="query" placeholder="Type query..."></textarea>
+      <div>
+        <button id="search">Search</button>
+        <span id="status"></span>
+      </div>
+
+      <div class="results" id="results"></div>
+
+      <hr/>
+      <h2>Admin / Upload</h2>
+      <p>Admin token (optional): <input id="admin-token" placeholder="Bearer token" style="width: 300px;" /> <button id="save-token">Save</button></p>
+      <input type="file" id="file" /> <button id="upload">Upload</button>
+      <div id="docs"></div>
+    </div>
+
+    <script>
+      const base = 'http://127.0.0.1:8000';
+      function authHeaders(){
+        const token = localStorage.getItem('admin_token')
+        return token ? {'Authorization': 'Bearer ' + token} : {}
+      }
+
+      async function refreshDocs(){
+        const res = await fetch(base + '/documents');
+        const js = await res.json();
+        const d = document.getElementById('docs');
+        d.innerHTML = '<h3>Documents</h3>' + js.map(x=>`<div>${x.filename} — ${x.chunks || 'n/a'}</div>`).join('');
+      }
+
+      document.getElementById('save-token').addEventListener('click', ()=>{
+        const v = document.getElementById('admin-token').value.trim();
+        localStorage.setItem('admin_token', v);
+        alert('Saved token in localStorage');
+      });
+
+      document.getElementById('upload').addEventListener('click', async ()=>{
+        const f = document.getElementById('file').files[0];
+        if(!f) return alert('Pick a file');
+        const fd = new FormData(); fd.append('file', f);
+        const headers = authHeaders();
+        const res = await fetch(base + '/upload', {method:'POST', body: fd, headers});
+        if(res.status === 401){ alert('Unauthorized — set admin token and try again'); return }
+        const rj = await res.json();
+        alert('Uploaded (demo): ' + rj.filename);
+        refreshDocs();
+      });
+
+      document.getElementById('search').addEventListener('click', async ()=>{
+        const q = document.getElementById('query').value.trim();
+        if(!q) return alert('Enter a query');
+        const s = document.getElementById('status'); s.innerHTML = '<span class="spinner"></span> Searching...';
+        const res = await fetch(base + '/search', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query:q, top_k:5})});
+        const js = await res.json();
+        s.innerHTML = '';
+        const r = document.getElementById('results');
+        if(!js.results || js.results.length===0) r.innerHTML = '<p>No results</p>';
+        else r.innerHTML = js.results.map(it => `<div style="margin-bottom:1rem"><strong>${it.filename}</strong><div style="font-size:0.95rem;color:#333">${it.chunk_text}</div><div style="font-size:0.85rem;color:#666">score: ${it.score.toFixed(3)}</div></div>`).join('');
+      });
+
+      // init
+      document.getElementById('admin-token').value = localStorage.getItem('admin_token') || '';
+      refreshDocs();
+    </script>
+  </body>
+</html>

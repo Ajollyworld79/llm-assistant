@@ -1,0 +1,9 @@
+body{font-family:Inter,system-ui,Arial;margin:20px;color:#111}
+.app{max-width:900px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between}
+nav button{margin-left:8px}
+.banner{background:#fffae6;padding:0.5rem;border:1px solid #ffd54a;margin-bottom:1rem}
+textarea{width:100%;min-height:100px}
+.results .result{border-bottom:1px solid #eee;padding:0.5rem 0}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid #ccc;border-top-color:#333;border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}

@@ -1,0 +1,13 @@
+quart
+uvicorn[standard]
+python-multipart
+aiofiles
+python-dotenv
+pdfplumber
+python-docx
+numpy
+qdrant-client
+sentence-transformers
+fastembed
+pillow
+pytesseract
