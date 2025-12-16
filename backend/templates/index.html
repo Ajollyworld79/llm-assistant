@@ -3,111 +3,211 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qdrant Chatbot — Demo Mode</title>
+    <title>Qdrant AI Assistant</title>
     <link rel="stylesheet" href="/static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="app">
-        <header>
-            <h1>🤖 Qdrant Chatbot — Demo Mode</h1>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="brand">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span>Qdrant AI</span>
+            </div>
+            
             <nav>
-            <button onclick="setView('chat')" id="chat-btn" class="active">💬 Chat</button>
-            <button onclick="setView('admin')" id="admin-btn">⚙️ Admin</button>
+                <div class="nav-item active" onclick="setView('chat')" id="nav-chat">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                    </svg>
+                    Chat Assistant
+                </div>
+                <div class="nav-item" onclick="setView('admin')" id="nav-admin">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                    </svg>
+                    Knowledge Base
+                </div>
             </nav>
-        </header>
-        <main>
-            <div id="chat-view" class="view">
-                <div class="banner">Demo mode — results are simulated; no active LLM connection.</div>
-                <div class="chat-history" id="chat-history"></div>
-                <div class="input-area">
-                    <textarea id="query-input" placeholder="Type your query..." onkeypress="handleKeyPress(event)"></textarea>
-                    <button onclick="doSearch()" id="send-btn">Send</button>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div id="demo-banner" class="demo-banner" style="display:none">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>Demo Mode — No active LLM connection. Results are simulated.</span>
+            </div>
+
+            <!-- Chat View -->
+            <div id="view-chat" class="view active">
+                <div class="chat-container">
+                    <div class="chat-history" id="chat-history">
+                        <!-- Messages go here -->
+                        <div class="message bot">
+                            <div class="message-label">AI Assistant</div>
+                            <div class="msg-bubble">
+                                Hello! I'm your AI assistant powered by Qdrant. Upload documents in the Knowledge Base to get started, or ask me questions about existing data.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="input-area">
+                        <textarea id="query-input" placeholder="Ask a question about your documents..." onkeypress="handleKeyPress(event)"></textarea>
+                        <button onclick="doSearch()" id="send-btn" class="btn btn-primary">
+                            <span id="send-icon">
+                                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9-2-9-18-9 18 9-2zm0 0v-8" />
+                                </svg>
+                            </span>
+                            <span id="send-spinner" class="spinner" style="display:none"></span>
+                            Send
+                        </button>
+                    </div>
                 </div>
             </div>
-            <div id="admin-view" class="view" style="display:none;">
-                <h2>📁 Upload Documents</h2>
-                <div>
-                    <label>Admin token: </label>
-                    <input id="token-input" value="" placeholder="Enter admin token" />
-                    <button onclick="saveToken()">Save token</button>
+
+            <!-- Admin View -->
+            <div id="view-admin" class="view">
+                <div class="admin-container">
+                    <div class=\"panel-header\">
+                        <h2>Knowledge Base Management</h2>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button onclick="optimizeDocs()" class="btn btn-secondary" title="Optimize Collection">
+                                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                </svg>
+                                Optimize
+                            </button>
+                            <button onclick="clearDocs()" class="btn btn-danger" title="Clear All Documents">
+                                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                                Clear All
+                            </button>
+                            <button onclick="refreshDocs()" class="btn btn-secondary">
+                                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Refresh
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="panel">
+                        <h3>Upload Documents</h3>
+                        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Supported formats: PDF, DOCX, TXT, CSV</p>
+                        
+                        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+                            <svg class="icon-upload" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                            <div>
+                                <strong>Click to upload</strong> or drag and drop<br>
+                                <span style="font-size: 0.85rem; color: var(--text-muted)">Max file size 10MB</span>
+                            </div>
+                            <input type="file" id="file-input" multiple style="display:none" onchange="handleFileSelect(event)" />
+                        </div>
+                        
+                        <div id="upload-queue" style="margin-top: 1.5rem; display:none;">
+                            <h4>Selected Files</h4>
+                            <div id="file-list" style="margin-bottom: 1rem; color: var(--text-muted);"></div>
+                            <button onclick="uploadFiles()" id="upload-btn" class="btn btn-primary">Start Upload</button>
+                            <div id="upload-progress" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+                        </div>
+                    </div>
+
+                    <div class="panel">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                            <h3>Indexed Documents</h3>
+                            <div style="font-size:0.85rem; color: var(--text-muted);">
+                                Status: <span id="system-status-badge" class="badge badge-txt">Checking...</span>
+                            </div>
+                        </div>
+                        
+                        <div style="overflow-x: auto;">
+                            <table class="doc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Document Name</th>
+                                        <th>Type</th>
+                                        <th>Indexed At</th>
+                                        <th>Chunks</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="docs-list">
+                                    <tr><td colspan="5" style="text-align:center; padding: 2rem;">Loading documents...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+                        <label style="font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.5rem;">Admin Access Token</label>
+                        <div style="display: flex; gap: 0.5rem; max-width: 400px;">
+                            <input id="token-input" type="password" placeholder="Enter token if configured" style="flex: 1; padding: 0.5rem; border: 1px solid var(--border); border-radius: 0.5rem;" />
+                            <button onclick="saveToken()" class="btn btn-secondary btn-sm">Save</button>
+                        </div>
+                    </div>
                 </div>
-                <div class="drop-zone" ondrop="handleDrop(event)" ondragover="handleDragOver(event)">
-                    <p>📎 Drag and drop files here or click to select</p>
-                    <input type="file" id="file-input" multiple onchange="handleFileSelect(event)" />
-                </div>
-                <p id="file-names"></p>
-                <button onclick="upload()" id="upload-btn">Upload</button>
-                <span id="upload-status"></span>
-                <h3>📋 Documents</h3>
-                <ul id="docs-list"></ul>
             </div>
         </main>
     </div>
 
-    <div id="modal" class="modal" style="display:none;">
-        <div class="modal-content">
-            <h3 id="modal-title"></h3>
-            <pre id="modal-text"></pre>
-            <button onclick="closeModal()">Close</button>
+    <!-- Document Modal -->
+    <div id="doc-modal" class="modal-backdrop">
+        <div class="modal-panel">
+            <div class="modal-header">
+                <span id="modal-title">Document Viewer</span>
+                <button onclick="closeModal()" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-text"></div>
         </div>
     </div>
 
     <script>
-        const BASE = '';
-        let view = 'chat';
-        let messages = [];
-        let files = [];
-        let token = localStorage.getItem('admin_token') || '';
+        const BASE = ''; // Relative path
+        let currentFiles = [];
+        let adminToken = localStorage.getItem('admin_token') || '';
+        document.getElementById('token-input').value = adminToken;
 
-        document.getElementById('token-input').value = token;
-
-        function setView(newView) {
-            view = newView;
-            document.getElementById('chat-view').style.display = view === 'chat' ? 'block' : 'none';
-            document.getElementById('admin-view').style.display = view === 'admin' ? 'block' : 'none';
-            document.getElementById('chat-btn').classList.toggle('active', view === 'chat');
-            document.getElementById('admin-btn').classList.toggle('active', view === 'admin');
+        // Init
+        checkHealth();
+        
+        function setView(view) {
+            document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById('view-' + view).classList.add('active');
+            document.getElementById('nav-' + view).classList.add('active');
+            
             if (view === 'admin') refreshDocs();
         }
 
-        async function doSearch() {
-            const query = document.getElementById('query-input').value.trim();
-            if (!query) return;
-            messages.push({type: 'user', content: query});
-            renderChat();
-            document.getElementById('query-input').value = '';
-            document.getElementById('send-btn').disabled = true;
-
+        async function checkHealth() {
             try {
-                const res = await fetch(BASE + '/search', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query, top_k:5})});
-                const js = await res.json();
-                messages.push({type: 'bot', content: 'Here are the search results:', results: js.results || []});
+                const res = await fetch(BASE + '/health');
+                const data = await res.json();
+                if (data.demo) {
+                    document.getElementById('demo-banner').style.display = 'flex';
+                    document.getElementById('system-status-badge').textContent = 'DEMO MODE';
+                    document.getElementById('system-status-badge').className = 'badge badge-pdf'; // red-ish
+                } else {
+                    document.getElementById('system-status-badge').textContent = 'PRODUCTION (Qdrant)';
+                    document.getElementById('system-status-badge').className = 'badge badge-csv'; // green-ish
+                }
             } catch (e) {
-                messages.push({type: 'bot', content: 'Error: ' + e.message});
+                console.error("Health check failed", e);
             }
-            renderChat();
-            document.getElementById('send-btn').disabled = false;
         }
 
-        function renderChat() {
-            const history = document.getElementById('chat-history');
-            history.innerHTML = messages.map(msg => `
-                <div class="message ${msg.type}">
-                    <strong>${msg.type === 'user' ? 'You' : 'Bot'}:</strong> ${msg.content}
-                    ${msg.results ? '<div class="results">' + msg.results.map(r => `
-                        <div class="result">
-                            <strong>${r.filename}</strong>
-                            <div class="snippet">${r.chunk_text}</div>
-                            <div class="score">score: ${r.score.toFixed(3)}</div>
-                            <button onclick="viewFull('${r.filename}')">View Full Document</button>
-                        </div>
-                    `).join('') + '</div>' : ''}
-                </div>
-            `).join('');
-            if (loading) {
-                history.innerHTML += '<div class="message bot"><em>🔄 Searching...</em></div>';
-            }
-        }
+        // --- Chat Logic ---
 
         function handleKeyPress(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -116,96 +216,378 @@
             }
         }
 
-        async function viewFull(filename) {
+        async function doSearch() {
+            const input = document.getElementById('query-input');
+            const query = input.value.trim();
+            if (!query) return;
+
+            // Add user message
+            addMessage('user', query);
+            input.value = '';
+            
+            // UI State
+            const btn = document.getElementById('send-btn');
+            const icon = document.getElementById('send-icon');
+            const spinner = document.getElementById('send-spinner');
+            btn.disabled = true;
+            icon.style.display = 'none';
+            spinner.style.display = 'inline-block';
+
             try {
-                const res = await fetch(BASE + `/document/${filename}`);
-                const js = await res.json();
-                document.getElementById('modal-title').textContent = js.filename;
-                document.getElementById('modal-text').textContent = js.text;
-                document.getElementById('modal').style.display = 'flex';
+                const res = await fetch(BASE + '/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, top_k: 4 })
+                });
+                const data = await res.json();
+                
+                // Add bot response with results
+                const answer = data.answer || data.message || 'Here are the most relevant results from your documents:';
+                addMessage('bot', answer, data.results);
+                
             } catch (e) {
-                alert('Error loading document');
+                addMessage('bot', 'Sorry, an error occurred while searching: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                icon.style.display = 'inline';
+                spinner.style.display = 'none';
+                document.getElementById('query-input').focus();
             }
         }
 
-        function closeModal() {
-            document.getElementById('modal').style.display = 'none';
+        function addMessage(type, text, results = null) {
+            const history = document.getElementById('chat-history');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${type}`;
+            
+            let contentHtml = `<div class="msg-bubble">${escapeHtml(text)}</div>`;
+            
+            if (results && results.length > 0) {
+                const cardsHtml = results.map(r => {
+                    const scoreClass = r.score > 0.8 ? 'match-high' : (r.score > 0.6 ? 'match-med' : '');
+                    return `
+                    <div class="result-card" onclick="viewDocument('${r.filename}')">
+                        <div class="result-header">
+                            <span>📄 ${r.filename}</span>
+                            <span class="score-badge ${scoreClass}">${(r.score * 100).toFixed(0)}% Match</span>
+                        </div>
+                        <div class="result-text">"${r.chunk_text}"</div>
+                    </div>`;
+                }).join('');
+                contentHtml += `<div class="results-grid">${cardsHtml}</div>`;
+            } else if (results && results.length === 0) {
+                 contentHtml += `<div class="msg-bubble" style="background:#f1f5f9; color:#64748b; margin-top:0.5rem; font-size:0.9rem">No relevant documents found.</div>`;
+            }
+
+            msgDiv.innerHTML = `
+                <div class="message-label">${type === 'user' ? 'You' : 'AI Assistant'}</div>
+                ${contentHtml}
+            `;
+            
+            history.appendChild(msgDiv);
+            history.scrollTop = history.scrollHeight;
         }
 
-        function saveToken() {
-            token = document.getElementById('token-input').value;
-            localStorage.setItem('admin_token', token);
-            alert('Saved token locally');
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
-        function handleDrop(e) {
-            e.preventDefault();
-            files = Array.from(e.dataTransfer.files);
-            updateFileNames();
-        }
-
-        function handleDragOver(e) {
-            e.preventDefault();
-        }
+        // --- Admin / Upload Logic ---
 
         function handleFileSelect(e) {
-            files = Array.from(e.target.files);
-            updateFileNames();
+            const files = Array.from(e.target.files);
+            addFilesToQueue(files);
         }
 
-        function updateFileNames() {
-            document.getElementById('file-names').textContent = files.length ? 'Selected: ' + files.map(f => f.name).join(', ') : '';
+        // Drag and Drop
+        const dropZone = document.getElementById('drop-zone');
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files) {
+                addFilesToQueue(Array.from(e.dataTransfer.files));
+            }
+        });
+
+        function addFilesToQueue(files) {
+            currentFiles = files;
+            const list = document.getElementById('file-list');
+            list.innerHTML = files.map(f => `<div>• ${f.name} (${(f.size/1024).toFixed(1)} KB)</div>`).join('');
+            document.getElementById('upload-queue').style.display = 'block';
         }
 
-        async function upload() {
-            if (files.length === 0) return alert('Choose files');
-            document.getElementById('upload-btn').disabled = true;
-            document.getElementById('upload-status').textContent = 'Uploading...';
-            for (let file of files) {
+        async function uploadFiles() {
+            if (currentFiles.length === 0) return;
+            
+            const btn = document.getElementById('upload-btn');
+            const progress = document.getElementById('upload-progress');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Uploading...';
+            
+            let successCount = 0;
+            let errors = [];
+
+            for (let i = 0; i < currentFiles.length; i++) {
+                const file = currentFiles[i];
+                progress.textContent = `Uploading ${i+1}/${currentFiles.length}: ${file.name}...`;
+                
                 const fd = new FormData();
                 fd.append('file', file);
-                const headers = {};
-                if (token) headers['Authorization'] = 'Bearer ' + token;
+                
                 try {
-                    const res = await fetch(BASE + '/upload', {method:'POST', body:fd, headers});
-                    const js = await res.json();
-                    if (res.status === 401) {
-                        document.getElementById('upload-status').textContent = 'Unauthorized - check admin token';
-                        break;
-                    }
-                    document.getElementById('upload-status').textContent = `Uploaded: ${js.filename}`;
+                    const headers = {};
+                    if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
+                    
+                    const res = await fetch(BASE + '/upload', { method: 'POST', body: fd, headers });
+                    if (res.status === 401) throw new Error("Unauthorized (Token invalid)");
+                    if (!res.ok) throw new Error("Server error");
+                    
+                    successCount++;
                 } catch (e) {
-                    document.getElementById('upload-status').textContent = `Error uploading ${file.name}`;
+                    errors.push(`${file.name}: ${e.message}`);
                 }
             }
-            document.getElementById('upload-btn').disabled = false;
-            files = [];
-            updateFileNames();
+
+            // Finish
+            btn.disabled = false;
+            btn.textContent = 'Start Upload';
+            currentFiles = [];
+            document.getElementById('upload-queue').style.display = 'none';
+            document.getElementById('file-input').value = ''; // reset
+            
+            if (errors.length > 0) {
+                alert(`Upload complete with errors:\n${errors.join('\n')}`);
+            } else {
+                // simple toast or alert
+            }
             refreshDocs();
         }
 
-        async function refreshDocs() {
+        async function clearDocs() {
+            if (!confirm('Are you sure you want to delete ALL documents? This cannot be undone.')) return;
+            
+            const headers = {};
+            if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
+            
             try {
-                const res = await fetch(BASE + '/documents');
-                const docs = await res.json();
-                const list = document.getElementById('docs-list');
-                list.innerHTML = docs.map(d => `<li>${d.filename} — ${d.chunks} chunks <button onclick="deleteDoc('${d.id}')">Delete</button></li>`).join('');
+                const res = await fetch(BASE + '/reset', { method: 'POST', headers });
+                if (res.status === 401) {
+                    alert("Unauthorized. Please check the admin token.");
+                    return;
+                }
+                if (res.ok) {
+                    alert("All documents cleared.");
+                    refreshDocs();
+                } else {
+                    alert("Failed to clear documents.");
+                }
             } catch (e) {
-                console.error('Error refreshing docs', e);
+                alert("Error: " + e.message);
             }
         }
 
-        async function deleteDoc(docId) {
+        async function optimizeDocs() {
             const headers = {};
-            if (token) headers['Authorization'] = 'Bearer ' + token;
-            const res = await fetch(BASE + `/document/${docId}`, {method:'DELETE', headers});
-            if (res.status === 401) return alert('Unauthorized');
-            if (res.ok) refreshDocs();
-            else alert('Failed to delete');
+            if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
+            
+            const btn = event.target.closest('button');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = 'Optimizing...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(BASE + '/optimize', { method: 'POST', headers });
+                if (res.status === 401) {
+                    alert("Unauthorized. Please check the admin token.");
+                    return;
+                }
+                if (res.ok) {
+                    // alert("Optimization triggered.");
+                } else {
+                    alert("Optimization failed.");
+                }
+            } catch (e) {
+                alert("Error: " + e.message);
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
         }
 
-        // Initial load
-        refreshDocs();
+        async function refreshDocs() {
+            const tbody = document.getElementById('docs-list');
+            // Don't show loading if we are just refreshing silently, but here we can
+            // tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 2rem;">Loading...</td></tr>';
+            
+            try {
+                const res = await fetch(BASE + '/documents');
+                const docs = await res.json();
+                
+                if (docs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 2rem; color: var(--text-muted);">No documents indexed yet. Upload some files to get started.</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = docs.map(d => {
+                    let badgeClass = 'badge-txt';
+                    if (d.type === 'PDF') badgeClass = 'badge-pdf';
+                    if (d.type === 'DOCX') badgeClass = 'badge-docx';
+                    if (d.type === 'CSV') badgeClass = 'badge-csv';
+                    
+                    return `
+                    <tr>
+                        <td><strong>${d.filename}</strong></td>
+                        <td><span class="badge ${badgeClass}">${d.type}</span></td>
+                        <td>${d.uploaded_at || 'N/A'}</td>
+                        <td>${d.chunks} chunks</td>
+                        <td>
+                            <button onclick="deleteDoc('${d.id}')" class="btn btn-danger btn-sm" title="Delete">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            </button>
+                            <button onclick="viewDocument('${d.filename}')" class="btn btn-secondary btn-sm" title="View">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 5 8.268 7.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                            </button>
+                        </td>
+                    </tr>
+                    `;
+                }).join('');
+            } catch (e) {
+                console.error(e);
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color: var(--danger);">Failed to load documents.</td></tr>`;
+            }
+        }
+
+        async function deleteDoc(id) {
+            if (!confirm('Are you sure you want to delete this document?')) return;
+            
+            const headers = {};
+            if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
+            
+            try {
+                const res = await fetch(BASE + `/document/${id}`, { method: 'DELETE', headers });
+                if (res.status === 401) {
+                    alert("Unauthorized. Please check the admin token.");
+                    return;
+                }
+                if (res.ok) refreshDocs();
+                else alert("Failed to delete document.");
+            } catch (e) {
+                alert("Error deleting document: " + e.message);
+            }
+        }
+
+        async function viewDocument(filename) {
+            // We use filename to fetch the doc details from our endpoint
+            // In demo mode we might use ID, but the endpoint supports ID.
+            // But wait, the list returns ID. The view button above uses filename? 
+            // In the search result we have filename. The endpoint /document/<id> expects ID.
+            // But in my updated backend, for Qdrant mode, I used filename as ID.
+            // So let's look up the ID from the list if possible, or just try fetching.
+            // Actually, in the list logic I passed d.id to delete, and d.filename to view.
+            // Let's assume viewDocument takes an ID or Filename and tries to find it.
+            // But the backend endpoint /document/<doc_id> searches by ID in demo mode.
+            // In Qdrant mode, I made it assume doc_id is filename if not found? 
+            // Let's check backend logic. 
+            // In Qdrant mode: delete_document uses filename match. get_document uses filename match?
+            // "if payload.get('filename') == doc_id"
+            // So yes, passing filename as ID works for Qdrant mode.
+            // For Demo mode, we need the UUID.
+            // ISSUE: Search results return `doc_id` and `filename`. I should use `doc_id` for viewing.
+            
+            // Let's fix the View button in Chat Results to pass doc_id if possible, 
+            // but the search result might have the Qdrant UUID which is not the filename.
+            // If I passed `r.filename` to `viewDocument` in chat, it might fail in Demo mode if it expects UUID.
+            // Let's fetch the list first to find the ID if needed? No that's slow.
+            
+            // Correction: The backend `get_document` endpoint:
+            // Demo mode: looks for `d["id"] == doc_id`.
+            // Qdrant mode: looks for `payload["filename"] == doc_id`.
+            
+            // So in Demo Mode I MUST use ID. In Qdrant Mode I MUST use Filename.
+            // This is inconsistent backend design (legacy).
+            // Quick fix: try both or just find the document in the local list?
+            // Or simpler: The search result returns `doc_id`. I should use that.
+            // BUT in Qdrant mode, `doc_id` is the point ID (UUID), not filename. 
+            // And `get_document` in Qdrant mode expects Filename (as per my code reading "assuming doc_id is filename").
+            
+            // Valid Fix:
+            // Update `viewDocument` to try fetching. If 404, maybe alert.
+            // For the UI, I'll pass the filename for Qdrant mode, and ID for Demo mode?
+            // I don't know the mode in the frontend strictly without checking health.
+            
+            // I'll just use the ID from the search result. 
+            // Wait, in Qdrant mode, `get_document` iterates and checks `payload.get('filename') == doc_id`.
+            // So if I pass the UUID (point ID), it won't match the filename.
+            // So for Qdrant mode, I MUST pass filename.
+            
+            // I will update the `viewDocument` call in the Chat render to use `r.filename` always?
+            // No, in Demo mode `r.doc_id` is the ID.
+            
+            // Let's just find the doc in the cached document list if we are in admin view?
+            // No, chat view doesn't have the list.
+            
+            // To make it robust:
+            // I'll try to fetch by the passed argument.
+            // The Search Result card passes `r.filename`. 
+            // In Demo mode, `get_document` will fail if passed a filename (expects UUID).
+            // In Qdrant mode, it expects filename.
+            
+            // I'll assume for now that passing `filename` is "safe" if I update the backend to support lookup by filename in demo mode too.
+            // OR I can just look up the ID from the filename in the frontend if I fetch the list once.
+            
+            // Let's do a quick lookup:
+            try {
+                // If we passed a filename, and we are in Demo mode, we need the ID.
+                // We can't easily know.
+                // Let's just try fetching.
+                openModal("Loading...", "Fetching document...");
+                
+                // Try fetching by the argument (could be ID or Filename)
+                let res = await fetch(BASE + `/document/${filename}`);
+                if (!res.ok) {
+                    // Fallback: If we sent filename but backend wanted ID (Demo mode)
+                    // We can try to list documents and find the ID for this filename
+                    const listRes = await fetch(BASE + '/documents');
+                    const list = await listRes.json();
+                    const found = list.find(d => d.filename === filename);
+                    if (found) {
+                        res = await fetch(BASE + `/document/${found.id}`);
+                    }
+                }
+                
+                if (!res.ok) throw new Error("Document not found");
+                
+                const data = await res.json();
+                openModal(data.filename, data.text);
+            } catch (e) {
+                openModal("Error", "Could not load document content. " + e.message);
+            }
+        }
+
+        function openModal(title, text) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-text').textContent = text;
+            document.getElementById('doc-modal').classList.add('open');
+        }
+        
+        function closeModal() {
+            document.getElementById('doc-modal').classList.remove('open');
+        }
+        
+        // Close modal on backdrop click
+        document.getElementById('doc-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'doc-modal') closeModal();
+        });
+
+        function saveToken() {
+            const t = document.getElementById('token-input').value.trim();
+            localStorage.setItem('admin_token', t);
+            adminToken = t;
+            alert("Token saved.");
+        }
     </script>
 </body>
 </html>

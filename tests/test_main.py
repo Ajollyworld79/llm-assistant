@@ -1,1 +1,0 @@
-# Legacy tests removed. Use backend/tests/test_app.py for Quart-based tests.
