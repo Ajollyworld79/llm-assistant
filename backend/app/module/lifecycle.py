@@ -56,7 +56,13 @@ class LifeCycleManager:
         # Start periodic GC cleanup task if gc_manager available
         try:
             if gc_manager is not None:
-                interval = getattr(settings, 'GC_INTERVAL', None) or 900
+                # Respect configured default/min/max interval values
+                default = int(getattr(settings, 'GC_DEFAULT_INTERVAL', 1800))
+                min_i = int(getattr(settings, 'GC_MIN_INTERVAL', 1800))
+                max_i = int(getattr(settings, 'GC_MAX_INTERVAL', 3600))
+                interval = max(min_i, min(default, max_i))
+                # Expose chosen interval for observability and tests
+                self.gc_interval = interval
                 _local_gc = gc_manager
 
                 async def _gc_loop():

@@ -7,10 +7,22 @@ from typing import Dict, Any
 
 log = logging.getLogger(__name__)
 
+# Attempt to read runtime settings if available
+try:
+    from backend.app.config import settings
+except Exception:
+    try:
+        from ..config import settings
+    except Exception:
+        settings = None
+
 class GarbageCollectionManager:
     def __init__(self):
         self.last_run = None
         self.runs = 0
+        # Configurable tuning
+        self.gc_max_memory_samples = int(getattr(settings, 'GC_MAX_MEMORY_SAMPLES', 100)) if settings else 100
+        self.gc_emergency_threshold = float(getattr(settings, 'GC_EMERGENCY_THRESHOLD', 0.85)) if settings else 0.85
 
     async def get_memory_usage(self) -> Dict[str, Any]:
         try:
@@ -31,11 +43,18 @@ class GarbageCollectionManager:
         self.run_garbage_collection()
 
     async def emergency_cleanup(self) -> None:
-        for _ in range(3):
+        # Respect configured sample limit, but keep a small upper bound to avoid stalls
+        sample_count = min(3, max(1, getattr(self, 'gc_max_memory_samples', 3)))
+        for _ in range(sample_count):
             gc.collect()
 
     async def get_statistics(self) -> Dict[str, Any]:
-        return {"runs": self.runs, "last_run": self.last_run}
+        return {
+            "runs": self.runs,
+            "last_run": self.last_run,
+            "gc_max_memory_samples": self.gc_max_memory_samples,
+            "gc_emergency_threshold": self.gc_emergency_threshold,
+        }
 
 
 # Single instance

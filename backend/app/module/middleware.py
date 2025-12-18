@@ -69,6 +69,10 @@ class EnhancedCleanupMiddleware:
         self.memory_warning_threshold_mb = 512
         self.memory_critical_threshold_mb = 1024
 
+        # Emergency GC configuration (can be overwritten by settings in setup_middleware)
+        self.gc_emergency_threshold = 0.85
+        self.gc_max_memory_samples = 100
+
         self.gc_threshold_requests = 100
         self.requests_since_gc = 0
 
@@ -99,7 +103,11 @@ class EnhancedCleanupMiddleware:
             if mem > self.peak_memory_mb:
                 self.peak_memory_mb = mem
 
-            if mem > self.memory_critical_threshold_mb:
+            # Emergency if memory crosses emergency fraction of critical threshold
+            if mem > (self.memory_critical_threshold_mb * self.gc_emergency_threshold):
+                log.warning(f"EMERGENCY memory usage: {mem:.1f} MB (threshold {self.gc_emergency_threshold * self.memory_critical_threshold_mb:.1f} MB)")
+                await self._emergency_cleanup()
+            elif mem > self.memory_critical_threshold_mb:
                 log.warning(f"CRITICAL memory usage: {mem:.1f} MB")
                 await self._emergency_cleanup()
             elif mem > self.memory_warning_threshold_mb:
@@ -187,8 +195,9 @@ class EnhancedCleanupMiddleware:
     async def _emergency_cleanup(self) -> None:
         try:
             log.warning("Running emergency cleanup")
-            # Aggressive GC
-            for _ in range(3):
+            # Aggressive GC - number of quick samples bounded by config
+            sample_count = min(3, getattr(self, 'gc_max_memory_samples', 3))
+            for _ in range(sample_count):
                 c = gc.collect()
                 if c > 0:
                     log.info(f"Emergency GC collected {c} objects")
@@ -304,6 +313,21 @@ def setup_middleware(app):
 
         existing_asgi = app.asgi_app
         cleanup = EnhancedCleanupMiddleware(existing_asgi)
+        # Load thresholds from config settings if available
+        try:
+            from backend.app.config import settings
+        except Exception:
+            try:
+                from ..config import settings
+            except Exception:
+                settings = None
+
+        if settings is not None:
+            cleanup.memory_warning_threshold_mb = getattr(settings, 'MEMORY_WARNING_THRESHOLD', cleanup.memory_warning_threshold_mb)
+            cleanup.memory_critical_threshold_mb = getattr(settings, 'MEMORY_CRITICAL_THRESHOLD', cleanup.memory_critical_threshold_mb)
+            cleanup.memory_cache_duration = getattr(settings, 'MEMORY_CACHE_DURATION', cleanup.memory_cache_duration)
+            cleanup.gc_emergency_threshold = getattr(settings, 'GC_EMERGENCY_THRESHOLD', cleanup.gc_emergency_threshold)
+            cleanup.gc_max_memory_samples = getattr(settings, 'GC_MAX_MEMORY_SAMPLES', cleanup.gc_max_memory_samples)
         app.asgi_app = cleanup
         app.cleanup_middleware = cleanup
         log.info("EnhancedCleanupMiddleware registered and ASGI app wrapped")

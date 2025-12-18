@@ -33,4 +33,34 @@ class Settings:
         # Admin token for protecting upload/reset endpoints
         self.admin_token = os.getenv('ADMIN_TOKEN') or None
 
+        # Search configuration
+        self.TOP_K_RESULTS = int(os.getenv('TOP_K_RESULTS', '5'))
+        # Similarity thresholds (0.0-1.0)
+        self.SIMILARITY_THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', '0.3'))
+        self.DOMAIN_GUARD_THRESHOLD = float(os.getenv('DOMAIN_GUARD_THRESHOLD', '0.5'))
+        # Qdrant search parameters
+        self.QDRANT_SCORE_THRESHOLD = float(os.getenv('QDRANT_SCORE_THRESHOLD', '0.15'))
+        self.MAX_SEARCH_LIMIT = int(os.getenv('MAX_SEARCH_LIMIT', '15'))
+
+        # AI model defaults
+        self.MAX_TOKENS = int(os.getenv('MAX_TOKENS', '800'))
+        self.TEMPERATURE = float(os.getenv('TEMPERATURE', '0.1'))
+
+        # Demo matching thresholds
+        self.DEMO_MATCH_RATIO = float(os.getenv('DEMO_MATCH_RATIO', '0.6'))
+        self.DEMO_MIN_MATCH_SCORE = float(os.getenv('DEMO_MIN_MATCH_SCORE', '0.0'))
+
+        # Garbage collection tuning
+        self.GC_DEFAULT_INTERVAL = int(os.getenv('GC_DEFAULT_INTERVAL', '1800'))
+        self.GC_MIN_INTERVAL = int(os.getenv('GC_MIN_INTERVAL', '1800'))
+        self.GC_MAX_INTERVAL = int(os.getenv('GC_MAX_INTERVAL', '3600'))
+        # Memory thresholds (MB)
+        self.MEMORY_WARNING_THRESHOLD = int(os.getenv('MEMORY_WARNING_THRESHOLD', '512'))
+        self.MEMORY_CRITICAL_THRESHOLD = int(os.getenv('MEMORY_CRITICAL_THRESHOLD', '1024'))
+        # Performance settings
+        self.GC_MAX_MEMORY_SAMPLES = int(os.getenv('GC_MAX_MEMORY_SAMPLES', '100'))
+        self.GC_EMERGENCY_THRESHOLD = float(os.getenv('GC_EMERGENCY_THRESHOLD', '0.85'))
+        self.MEMORY_CACHE_DURATION = int(os.getenv('MEMORY_CACHE_DURATION', '3'))
+        self.INACTIVITY_RESET_HOURS = int(os.getenv('INACTIVITY_RESET_HOURS', '2'))
+
 settings = Settings()

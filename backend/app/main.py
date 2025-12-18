@@ -13,7 +13,7 @@
 from quart import Quart, request, jsonify, Response, render_template, send_from_directory
 from quart_cors import cors
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple, cast
 import uuid
 import io
 import csv
@@ -69,6 +69,151 @@ try:
     from openai import AsyncAzureOpenAI
 except ImportError:
     AsyncAzureOpenAI = None
+
+# AI Manager (moved into this file)
+class AIManager:
+    """Wrapper around Azure OpenAI chat use and response parsing."""
+
+    def __init__(self, settings, embeddings_module, client=None):
+        self.settings = settings
+        self.embeddings = embeddings_module
+        self._client = client
+
+    def initialize_client(self) -> None:
+        """Lazily initialize AsyncAzureOpenAI client if available."""
+        if self._client is None:
+            if AsyncAzureOpenAI is None:
+                log.warning("AsyncAzureOpenAI is not available; AI calls will be disabled")
+                return
+            try:
+                # Cast to str to satisfy type checkers - values may be None at runtime
+                self._client = AsyncAzureOpenAI(
+                    api_key=cast(str, getattr(self.settings, "azure_openai_api_key", "")),
+                    api_version=cast(str, getattr(self.settings, "azure_openai_api_version", "")),
+                    azure_endpoint=cast(str, getattr(self.settings, "azure_openai_endpoint", "")),
+                )
+                log.info("AIManager: AsyncAzureOpenAI client initialized")
+            except Exception as e:
+                log.exception("AIManager: failed to initialize client: %s", e)
+                self._client = None
+
+    async def ask_agent_with_context(self, query: str, context: str, conversation_history: Optional[list] = None) -> Tuple[str, Optional[int]]:
+        """Send the query + context + history to the chat model.
+
+        Returns (cleaned_text, source_indicator) where source_indicator is 0,1 or None.
+        """
+        if conversation_history is None:
+            conversation_history = []
+
+        # Ensure client
+        if self._client is None:
+            self.initialize_client()
+        if self._client is None:
+            return ("Beklager, noget gik galt med assistenten.", None)
+
+        # Build system prompt and messages
+        max_ctx = getattr(self.settings, "MAX_CONTEXT_CHARS", 4000)
+        ctx = (context[:max_ctx] + "\n\n...[Truncated context]...") if context and len(context) > max_ctx else (context or "")
+
+        system_prompt = self._build_system_prompt(ctx)
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Conversation history (safe)
+        max_history = int(getattr(self.settings, "MAX_CONVERSATION_HISTORY", 6))
+        history_limit = min(len(conversation_history), max_history)
+        for msg in (conversation_history or [])[-history_limit:]:
+            if isinstance(msg, dict):
+                u = msg.get("user", "")
+                a = msg.get("assistant", "")
+                if u:
+                    messages.append({"role": "user", "content": u})
+                if a:
+                    messages.append({"role": "assistant", "content": a})
+
+        messages.append({"role": "user", "content": query})
+
+        try:
+            # Ensure model is a proper string per type expectations
+            model = cast(str, getattr(self.settings, "azure_deployment_chat", ""))
+            if not model:
+                log.warning("AIManager: no chat model configured; aborting request")
+                return ("Beklager, noget gik galt med assistenten.", None)
+
+            temperature = float(getattr(self.settings, "TEMPERATURE", 0.3))
+            max_tokens = int(getattr(self.settings, "MAX_TOKENS", 512))
+
+            # Cast messages to Any to satisfy typing for third-party API wrappers
+            completion = await self._client.chat.completions.create(
+                model=model,
+                messages=cast(Any, messages),
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+            try:
+                raw = getattr(completion.choices[0].message, "content", "") or ""
+            except Exception:
+                raw = str(completion) if completion else ""
+
+            cleaned, source = self._parse_and_clean_source(raw)
+            return cleaned, source
+
+        except Exception as e:
+            txt = str(e).lower()
+            if "content_filter" in txt or "responsibleaipolicyviolation" in txt or (hasattr(e, "status_code") and getattr(e, "status_code", None) == 400):
+                return "__CONTENT_FILTER_BLOCKED__", None
+            log.exception("AIManager: ask_agent_with_context failed: %s", e)
+            return ("Beklager, noget gik galt med assistenten.", None)
+
+    def _parse_and_clean_source(self, response_text: str) -> Tuple[str, Optional[int]]:
+        """Robust parsing of a [SOURCE:X] marker on the FIRST line only."""
+        if not response_text:
+            return response_text, None
+
+        m = re.match(r'^\s*\**\s*\[SOURCE:(?P<s>[01])\]\s*\**\s*(?:\n)?\s*(?P<rest>.*)', response_text, flags=re.S)
+        if m:
+            rest = m.group("rest") or ""
+            return rest.strip(), int(m.group("s"))
+        return response_text, None
+
+    def _build_system_prompt(self, context: str) -> str:
+        base = (
+            "You are a helpful, concise, and safety-conscious assistant. "
+            "Answer clearly in English and use Markdown formatting when it improves readability. "
+            "Be factual, admit uncertainty when appropriate, and do not fabricate information or external links.\n\n"
+        )
+        base += "CONTEXT: " + (context if context else "[None]")
+        return base
+
+
+class DemoLLM:
+    """Deterministic demo-mode LLM emulator.
+
+    Returns short, deterministic answers built from provided context and marks
+    a SOURCE (0 or 1) heuristically.
+    """
+
+    def __init__(self, max_chars: int = 800):
+        self.max_chars = max_chars
+
+    async def generate(self, query: str, context: str) -> tuple[str, Optional[int]]:
+        # If no context, return a helpful demo message
+        if not context or not context.strip():
+            return ("I have no documents to answer from. Try uploading or adding documents.", None)
+
+        # Pick up to 3 blocks separated by paragraphs
+        parts = [p.strip() for p in context.split("\n\n") if p.strip()][:3]
+        body = "\n\n".join(parts)
+        if len(body) > self.max_chars:
+            body = body[: self.max_chars - 3].rstrip() + "..."
+
+        # Heuristic source selection
+        lower = body.lower()
+        source = 1 if "microsoft" in lower or "windows" in lower or "office" in lower else 0
+
+        # Return in the same style as the real LLM (with SOURCE on first line)
+        text = f"[SOURCE:{source}]\n{body}"
+        return text, source
 
 # Optional Qdrant imports for typing
 try:
@@ -280,7 +425,7 @@ class ParserService:
 
                     try:
                         # Prefer pypdf for link extraction and robust text
-                        from pypdf import PdfReader
+                        
                         reader = PdfReader(io.BytesIO(content))
                         for i, page in enumerate(reader.pages, start=1):
                             try:
@@ -839,6 +984,8 @@ class SupportAgent:
         self.qdrant = qdrant_service
         self.settings = settings
         self.lifecycle = lifecycle
+        # AI manager moved from legacy app - lazy-initializes its client
+        self.ai_manager = AIManager(self.settings, self.embedding)
 
 
 # Single global agent
@@ -1148,41 +1295,48 @@ async def search():
     unique_files = set(r['filename'] for r in top)
 
     answer = None
-    if not settings.demo and AsyncAzureOpenAI:
+    # Debug: log AI branch decisions
+    log.info("AI branch check: demo=%s, AsyncAzureOpenAI=%s, key=%s, endpoint=%s, deployment=%s", settings.demo, bool(AsyncAzureOpenAI), getattr(settings, 'azure_openai_api_key', None), getattr(settings, 'azure_openai_endpoint', None), getattr(settings, 'azure_deployment_chat', None))
+
+    # Demo-mode branch: use deterministic DemoLLM and clearly note that no chat model is available
+    if settings.demo:
+        try:
+            # Apply demo matching thresholds: only include chunks that pass confidence checks
+            best_score = max((r.get('score', 0.0) for r in top), default=0.0)
+            ratio = float(getattr(settings, 'DEMO_MATCH_RATIO', 0.4))
+            min_score = float(getattr(settings, 'DEMO_MIN_MATCH_SCORE', 0.0))
+            threshold = max(best_score * ratio, min_score)
+
+            filtered = [r for r in top if r.get('score', 0.0) >= threshold]
+
+            if not filtered:
+                answer = "(Demo mode - no chat model available) I couldn't find any confident matches in the documents (no documents matched the query)."
+            else:
+                context_parts = [f"Source ({r['filename']}): {r['chunk_text']}" for r in filtered]
+                context = "\n\n".join(context_parts)
+                demo = DemoLLM()
+                cleaned, source_indicator = await demo.generate(query, context)
+                answer = f"(Demo mode - no chat model available) {cleaned}"
+        except Exception as e:
+            log.exception("Demo LLM failed: %s", e)
+            answer = "(Demo mode) Sorry, demo generation failed."
+
+    elif not settings.demo and AsyncAzureOpenAI:
         try:
             if not settings.azure_openai_api_key or not settings.azure_openai_endpoint or not settings.azure_deployment_chat:
-                 answer = "Azure OpenAI not configured (Key, Endpoint, or Chat Deployment missing)."
+                answer = "Azure OpenAI not configured (Key, Endpoint, or Chat Deployment missing)."
             else:
-                # Type assertion for the linter since we checked it above
-                chat_model: str = settings.azure_deployment_chat  # type: ignore
-                
-                context_parts = []
-                for r in top:
-                    context_parts.append(f"Source ({r['filename']}): {r['chunk_text']}")
+                # Build context from top search results
+                context_parts = [f"Source ({r['filename']}): {r['chunk_text']}" for r in top]
                 context = "\n\n".join(context_parts)
-                
-                # Calculate stats
-                num_files = len(unique_files)
-                num_chunks = len(top)
-                
-                system_prompt = "You are a helpful assistant. Answer the user's question using ONLY the provided context. If the answer is not in the context, say so."
-                user_prompt = f"Based on {num_chunks} relevant chunks from {num_files} files.\n\nContext:\n{context}\n\nQuestion: {query}"
-                
-                client = AsyncAzureOpenAI(
-                    api_key=settings.azure_openai_api_key,
-                    api_version=settings.azure_openai_api_version,
-                    azure_endpoint=settings.azure_openai_endpoint
-                )
-                
-                completion = await client.chat.completions.create(
-                    model=chat_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.3
-                )
-                answer = completion.choices[0].message.content
+
+                # Ask via AIManager (returns cleaned text and source indicator)
+                cleaned, source_indicator = await support_agent.ai_manager.ask_agent_with_context(query, context, conversation_history=[])
+
+                if cleaned == "__CONTENT_FILTER_BLOCKED__":
+                    answer = "Content blocked by safety filters."
+                else:
+                    answer = cleaned
         except Exception as e:
             log.exception("RAG Generation failed")
             answer = f"Error generating answer: {str(e)}"
