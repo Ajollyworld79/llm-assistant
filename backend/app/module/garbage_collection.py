@@ -33,20 +33,20 @@ class GarbageCollectionManager:
         except Exception:
             return {}
 
-    def run_garbage_collection(self, force: bool = False) -> Dict[str, Any]:
-        collected = gc.collect()
+    async def run_garbage_collection(self, force: bool = False) -> Dict[str, Any]:
+        collected = await asyncio.to_thread(gc.collect)
         self.runs += 1
         self.last_run = datetime.now().isoformat()
         return {"collected_objects": collected, "last_run": self.last_run}
 
     async def periodic_cleanup(self) -> None:
-        self.run_garbage_collection()
+        await self.run_garbage_collection()
 
     async def emergency_cleanup(self) -> None:
         # Respect configured sample limit, but keep a small upper bound to avoid stalls
         sample_count = min(3, max(1, getattr(self, 'gc_max_memory_samples', 3)))
         for _ in range(sample_count):
-            gc.collect()
+            await asyncio.to_thread(gc.collect)
 
     async def get_statistics(self) -> Dict[str, Any]:
         return {

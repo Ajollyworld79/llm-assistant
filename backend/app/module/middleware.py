@@ -129,7 +129,7 @@ class EnhancedCleanupMiddleware:
             # GC management
             self.requests_since_gc += 1
             if self.requests_since_gc >= self.gc_threshold_requests:
-                self._run_garbage_collection()
+                await self._run_garbage_collection()
 
         except Exception as e:
             self.health_stats["failed_requests"] += 1
@@ -180,7 +180,7 @@ class EnhancedCleanupMiddleware:
             if gc_manager is not None:
                 await gc_manager.periodic_cleanup()
             else:
-                self._run_garbage_collection()
+                await self._run_garbage_collection()
 
             self.last_cleanup = time.monotonic()
             self.health_stats["cleanup_runs"] += 1
@@ -198,7 +198,7 @@ class EnhancedCleanupMiddleware:
             # Aggressive GC - number of quick samples bounded by config
             sample_count = min(3, getattr(self, 'gc_max_memory_samples', 3))
             for _ in range(sample_count):
-                c = gc.collect()
+                c = await asyncio.to_thread(gc.collect)
                 if c > 0:
                     log.info(f"Emergency GC collected {c} objects")
 
@@ -218,9 +218,9 @@ class EnhancedCleanupMiddleware:
         except Exception as e:
             log.exception(f"_emergency_cleanup failed: {e}")
 
-    def _run_garbage_collection(self) -> None:
+    async def _run_garbage_collection(self) -> None:
         try:
-            collected = gc.collect()
+            collected = await asyncio.to_thread(gc.collect)
             self.requests_since_gc = 0
             if collected > 0:
                 log.debug(f"Middleware GC: collected {collected} objects")

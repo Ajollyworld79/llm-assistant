@@ -38,25 +38,28 @@
 
         <!-- Main Content -->
         <main class="main-content">
-            <div id="demo-banner" class="demo-banner" style="display:none">
+            {% if demo_mode %}
+            <div id="demo-banner" class="demo-banner">
                 <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <span>Demo Mode — No active LLM connection. Results are simulated.</span>
             </div>
+            {% endif %}
 
             <!-- Chat View -->
             <div id="view-chat" class="view active">
                 <div class="chat-container">
+                    <!-- Welcome banner (static, not part of chat-history) -->
+                    <div class="welcome-box">
+                        <div class="message-label">AI Assistant</div>
+                        <div class="msg-bubble">{{ welcome_prompt|trim }}</div>
+                    </div>
+
                     <div class="chat-history" id="chat-history">
                         <!-- Messages go here -->
-                        <div class="message bot">
-                            <div class="message-label">AI Assistant</div>
-                            <div class="msg-bubble">
-                                Hello! I'm your AI assistant powered by Qdrant. Upload documents in the Knowledge Base to get started, or ask me questions about existing data.
-                            </div>
-                        </div>
                     </div>
+
                     <div class="input-area">
                         <textarea id="query-input" placeholder="Ask a question about your documents..." onkeypress="handleKeyPress(event)"></textarea>
                         <button onclick="doSearch()" id="send-btn" class="btn btn-primary">
@@ -78,7 +81,7 @@
                     <div class=\"panel-header\">
                         <h2>Knowledge Base Management</h2>
                         <div style="display: flex; gap: 0.5rem;">
-                            <button onclick="optimizeDocs()" class="btn btn-secondary" title="Optimize Collection">
+                            <button onclick="optimizeDocs(event, this)" class="btn btn-secondary" title="Optimize Collection">
                                 <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                                 </svg>
@@ -366,7 +369,25 @@
             refreshDocs();
         }
 
-        async function clearDocs() {
+        function showToast(message, success = true, duration = 4000) {
+            // Remove existing toast
+            const existing = document.getElementById('toast');
+            if (existing) existing.remove();
+
+            const toast = document.createElement('div');
+            toast.id = 'toast';
+            toast.className = `toast ${success ? 'toast-success' : 'toast-error'}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            // Auto-dismiss
+            setTimeout(() => {
+                toast.classList.add('toast-hide');
+                setTimeout(() => toast.remove(), 400);
+            }, duration);
+        }
+
+        async function clearDocs(e, btnEl) {
             if (!confirm('Are you sure you want to delete ALL documents? This cannot be undone.')) return;
             
             const headers = {};
@@ -375,45 +396,55 @@
             try {
                 const res = await fetch(BASE + '/reset', { method: 'POST', headers });
                 if (res.status === 401) {
-                    alert("Unauthorized. Please check the admin token.");
+                    showToast("Unauthorized. Please check the admin token.", false);
                     return;
                 }
+                const data = await res.json().catch(() => null);
                 if (res.ok) {
-                    alert("All documents cleared.");
+                    if (data && data.deleted !== undefined) {
+                        showToast(`Cleared ${data.deleted} points.`);
+                    } else {
+                        showToast(data && data.message ? data.message : "All documents cleared.");
+                    }
                     refreshDocs();
                 } else {
-                    alert("Failed to clear documents.");
+                    showToast((data && data.error) ? data.error : "Failed to clear documents.", false);
                 }
             } catch (e) {
-                alert("Error: " + e.message);
+                showToast("Error: " + e.message, false);
             }
         }
 
-        async function optimizeDocs() {
+        async function optimizeDocs(e, btnEl) {
             const headers = {};
             if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
             
-            const btn = event.target.closest('button');
-            const originalText = btn.innerHTML;
-            btn.innerHTML = 'Optimizing...';
-            btn.disabled = true;
+            const btn = btnEl || (e && e.target && e.target.closest && e.target.closest('button'));
+            const originalText = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.innerHTML = 'Optimizing...';
+                btn.disabled = true;
+            }
 
             try {
                 const res = await fetch(BASE + '/optimize', { method: 'POST', headers });
                 if (res.status === 401) {
-                    alert("Unauthorized. Please check the admin token.");
+                    showToast("Unauthorized. Please check the admin token.", false);
                     return;
                 }
+                const data = await res.json().catch(() => null);
                 if (res.ok) {
-                    // alert("Optimization triggered.");
+                    showToast(data && data.message ? data.message : "Optimization triggered.");
                 } else {
-                    alert("Optimization failed.");
+                    showToast((data && data.error) ? data.error : "Optimization failed.", false);
                 }
             } catch (e) {
-                alert("Error: " + e.message);
+                showToast("Error: " + e.message, false);
             } finally {
-                btn.innerHTML = originalText;
-                btn.disabled = false;
+                if (btn) {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }
             }
         }
 

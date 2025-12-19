@@ -114,11 +114,26 @@ body {
 .chat-history {
   flex: 1;
   overflow-y: auto;
-  padding: 2rem;
+  padding: 1rem 2rem 2rem 2rem;
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.25rem;
   scroll-behavior: smooth;
+}
+
+/* Welcome box shown above the chat history, not part of message flow */
+.welcome-box {
+  max-width: 900px;
+  margin: 1.25rem auto 0 auto;
+  padding: 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.welcome-box .msg-bubble {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  color: var(--text-main);
 }
 
 .message {
@@ -220,9 +235,12 @@ textarea:focus {
 .result-text {
   color: var(--text-muted);
   margin-bottom: 0.75rem;
+  /* Use the webkit box model for line-clamp support */
   display: -webkit-box;
-  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+  box-orient: vertical; /* non-vendor fallback */
+  -webkit-line-clamp: 3;
+  line-clamp: 3; /* standard property for compatibility */
   overflow: hidden;
   line-height: 1.5;
 }
@@ -381,6 +399,23 @@ textarea:focus {
   transition: transform 0.2s;
 }
 .modal-backdrop.open .modal-panel { transform: scale(1); }
+
+/* Toast notifications */
+.toast {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  font-weight: 700;
+  color: white;
+  z-index: 120;
+  box-shadow: 0 4px 14px rgba(2,6,23,0.2);
+  transition: transform 0.2s, opacity 0.2s;
+}
+.toast-hide { opacity: 0; transform: translateY(-6px); }
+.toast-success { background: #10b981; }
+.toast-error { background: #ef4444; }
 
 .modal-header {
   padding: 1.25rem 1.5rem;

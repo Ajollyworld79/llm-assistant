@@ -50,7 +50,8 @@ class LifeCycleManager:
     async def startup(self):
         """Initialize resources on application startup and schedule background tasks."""
         log.info("Starting up application resources...")
-        self._connect_qdrant()
+        # Run Qdrant connection in a separate thread to avoid blocking startup
+        await asyncio.to_thread(self._connect_qdrant)
         await embeddings.preload_embedding_models()
 
         # Start periodic GC cleanup task if gc_manager available

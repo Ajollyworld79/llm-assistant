@@ -87,7 +87,17 @@ async def preload_embedding_models():
         except Exception as e:
             log.warning('Failed to preload SentenceTransformer: %s', e)
 
-    if HAS_FASTEMBED and _CLASS_FE is None:
+    # Only preload FastEmbed if SentenceTransformer is NOT loaded, or if specifically requested
+    # Check if we successfully loaded ST above
+    st_loaded = (_CLASS_ST is not None)
+    
+    # If ST is loaded, we skip FastEmbed preload to save resources, 
+    # unless FastEmbed is the primary configured provider (unlikely given defaults, but possible).
+    should_preload_fe = HAS_FASTEMBED and _CLASS_FE is None
+    if st_loaded and settings.embedding_provider != 'fastembed':
+        should_preload_fe = False
+
+    if should_preload_fe:
         try:
             # initialize with timeout to avoid blocking startup indefinitely
             def init_fe():

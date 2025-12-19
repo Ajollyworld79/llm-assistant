@@ -70,7 +70,7 @@ try:
 except ImportError:
     AsyncAzureOpenAI = None
 
-# AI Manager (moved into this file)
+
 class AIManager:
     """Wrapper around Azure OpenAI chat use and response parsing."""
 
@@ -86,7 +86,7 @@ class AIManager:
                 log.warning("AsyncAzureOpenAI is not available; AI calls will be disabled")
                 return
             try:
-                # Cast to str to satisfy type checkers - values may be None at runtime
+
                 self._client = AsyncAzureOpenAI(
                     api_key=cast(str, getattr(self.settings, "azure_openai_api_key", "")),
                     api_version=cast(str, getattr(self.settings, "azure_openai_api_version", "")),
@@ -240,6 +240,14 @@ DEMO_BANNER = "Demo mode — results are simulated; no active LLM connection."
 EMBED_DIM = settings.embedding_dim
 
 
+def get_welcome_prompt() -> str:
+    """Return the welcome message shown on the index page (demo-aware)."""
+    base = "Hello! I'm your AI assistant powered by Qdrant. Upload documents to the Knowledge Base to get started, or ask me questions about existing data."
+    if getattr(settings, "demo", False):
+        return f"{base} Note: demo mode is active and responses are simulated."
+    return base
+
+
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
@@ -338,15 +346,9 @@ class ParserService:
     """
 
     def __init__(self):
-        # placeholder for future options (e.g., max file size, ocr settings)
         self.logger = log
 
-    async def parse_content(self, filename: str, content: bytes) -> str:
-        """See previous `parse_content` behavior.
-
-        Keeps backward-compatible behavior and graceful fallbacks when optional
-        libraries are missing.
-        """
+    def parse_content(self, filename: str, content: bytes) -> str:
 
         lower = filename.lower()
 
@@ -385,11 +387,7 @@ class ParserService:
                         # Prefer semicolon when present
                         sep = ';' if ';' in csv_lines else ','
                         df = pd.read_csv(tmp_path, sep=sep, encoding='utf-8')
-                        content_out = f"**Data fra {filename}**\n\n"
-                        if gruppe_navn:
-                            content_out += f"Gruppe: {gruppe_navn}\n"
-                        content_out += f"Kolonner: {', '.join(df.columns)}\n"
-                        content_out += f"Antal rækker: {len(df)}\n\n"
+                        content_out = f"**Data from {filename}**\n\n"
 
                         for _, row in df.iterrows():
                             row_data = []
@@ -492,7 +490,7 @@ class ParserService:
                     combined = '\n'.join([p for p in text_parts if p and p.strip()])
 
                     if links:
-                        combined += '\n\n**Links fra PDF dokumentet:**\n'
+                        combined += '\n\n**Links from PDF document:**\n'
                         for l in links:
                             combined += f"- {l}\n"
 
@@ -542,7 +540,7 @@ class ParserService:
                                 pass
 
                         if all_document_links:
-                            links_section = '\n\n**Links fra dokumentet:**\n' + '\n'.join([f"- {text}: {url}" for text, url in all_document_links])
+                            links_section = '\n\n**Links from document:**\n' + '\n'.join([f"- {text}: {url}" for text, url in all_document_links])
                             parts.append(links_section)
                     except Exception:
                         # Ignore link extraction failures
@@ -597,16 +595,16 @@ class ParserService:
                         filename_without_ext = filename.rsplit('.', 1)[0].replace('_', ' ')
 
                         content_out = f"**{filename_without_ext}**\n\n"
-                        content_out += f"Type: Internet Link/Genvej\n"
-                        content_out += f"Beskrivelse: Dette er et link til {filename_without_ext}.\n"
+                        content_out += f"Type: Internet Link / Shortcut\n"
+                        content_out += f"Description: This is a link to {filename_without_ext}.\n"
 
                         if 'powerbi.com' in domain:
-                            content_out += "Dette er et Power BI rapporteringslink.\n"
+                            content_out += "This is a Power BI report link.\n"
                         elif 'sharepoint.com' in domain:
-                            content_out += "Dette er et SharePoint link.\n"
+                            content_out += "This is a SharePoint link.\n"
 
                         content_out += f"\nLink: [{filename_without_ext}]({url})\n"
-                        content_out += f"\nNøgleord: {filename_without_ext}, link, genvej, URL\n"
+                        content_out += f"\nKeywords: {filename_without_ext}, link, shortcut, URL\n"
 
                         return content_out
                     else:
@@ -628,8 +626,10 @@ class ParserService:
 parser_service = ParserService()
 
 async def parse_content(filename: str, content: bytes) -> str:
-    """Compatibility wrapper that delegates to the shared ParserService."""
-    return await parser_service.parse_content(filename, content)
+    """Compatibility wrapper that delegates to the shared ParserService.
+    Runs the blocking parser in a separate thread to avoid blocking the event loop.
+    """
+    return await asyncio.to_thread(parser_service.parse_content, filename, content)
 
 
 class QdrantService:
@@ -642,17 +642,17 @@ class QdrantService:
     def is_available(self) -> bool:
         return bool(self.lifecycle.qdrant_client)
 
-    def scroll(self, limit: int = 2000):
+    async def scroll(self, limit: int = 2000):
         try:
-            return self.lifecycle.qdrant_client.scroll(collection_name=self.collection, limit=limit)
+            return await asyncio.to_thread(self.lifecycle.qdrant_client.scroll, collection_name=self.collection, limit=limit)
         except Exception:
             return ([], None)
 
-    def list_documents(self):
+    async def list_documents(self):
         if not self.is_available():
             return []
         try:
-            res, _ = self.scroll(limit=2000)
+            res, _ = await self.scroll(limit=2000)
         except Exception:
             return []
 
@@ -672,11 +672,11 @@ class QdrantService:
 
         return list(unique_files.values())
 
-    def get_document_chunks(self, doc_id: str):
+    async def get_document_chunks(self, doc_id: str):
         if not self.is_available():
             return []
         try:
-            res, _ = self.lifecycle.qdrant_client.scroll(collection_name=self.collection, limit=1000)
+            res, _ = await asyncio.to_thread(self.lifecycle.qdrant_client.scroll, collection_name=self.collection, limit=1000)
         except Exception:
             return []
 
@@ -688,14 +688,14 @@ class QdrantService:
 
         return chunks
 
-    def delete_by_filename(self, doc_id: str) -> int:
+    async def delete_by_filename(self, doc_id: str) -> int:
         """Delete all points whose payload filename/file_name matches doc_id.
         Returns number of deleted points (best-effort)."""
         if not self.is_available():
             return 0
 
         try:
-            scroll_res = self.lifecycle.qdrant_client.scroll(collection_name=self.collection, limit=10000)
+            scroll_res = await asyncio.to_thread(self.lifecycle.qdrant_client.scroll, collection_name=self.collection, limit=10000)
             all_points = scroll_res[0] if scroll_res else []
         except Exception:
             all_points = []
@@ -707,7 +707,7 @@ class QdrantService:
                 ids_to_delete.append(point.id)
 
         if ids_to_delete:
-            self.lifecycle.qdrant_client.delete(collection_name=self.collection, points_selector=ids_to_delete)
+            await asyncio.to_thread(self.lifecycle.qdrant_client.delete, collection_name=self.collection, points_selector=ids_to_delete)
 
         return len(ids_to_delete)
 
@@ -743,7 +743,7 @@ class QdrantService:
                 return False
 
             try:
-                collection_info = await client.get_collection(self.collection)
+                collection_info = await asyncio.to_thread(client.get_collection, self.collection)
                 log.info(f"Qdrant collection '{self.collection}' ready: {collection_info.points_count} points")
                 self.collection_ready = True
                 return True
@@ -815,11 +815,11 @@ class QdrantService:
                 try:
                     # Use search API if present or fallback to query_points
                     if hasattr(client, 'search'):
-                        results = await client.search(collection_name=self.collection, query_vector=vector, limit=min(top_k*2, getattr(settings, 'MAX_SEARCH_LIMIT', 100)), score_threshold=getattr(settings, 'QDRANT_SCORE_THRESHOLD', 0.0))
+                        results = await asyncio.to_thread(client.search, collection_name=self.collection, query_vector=vector, limit=min(top_k*2, getattr(settings, 'MAX_SEARCH_LIMIT', 100)), score_threshold=getattr(settings, 'QDRANT_SCORE_THRESHOLD', 0.0))
                         # client.search returns list-like results
                     else:
                         # query_points for older client
-                        res = client.query_points(collection_name=self.collection, query=vector, limit=top_k*2)
+                        res = await asyncio.to_thread(client.query_points, collection_name=self.collection, query=vector, limit=top_k*2)
                         results = getattr(res, 'results', res)
                     break
                 except Exception as e:
@@ -935,12 +935,12 @@ class QdrantService:
             batch_size = 100
 
             while True:
-                scroll_result = await client.scroll(collection_name=self.collection, limit=batch_size, offset=offset, with_payload=False, with_vectors=False)
+                scroll_result = await asyncio.to_thread(client.scroll, collection_name=self.collection, limit=batch_size, offset=offset, with_payload=False, with_vectors=False)
                 points, next_offset = scroll_result
                 if not points:
                     break
                 ids = [p.id for p in points]
-                await client.delete(collection_name=self.collection, points_selector=ids)
+                await asyncio.to_thread(client.delete, collection_name=self.collection, points_selector=ids)
                 total_deleted += len(ids)
                 offset = next_offset
                 if next_offset is None:
@@ -961,7 +961,7 @@ class QdrantService:
                 return {"success": False, "error": "Qdrant client not available"}
 
             try:
-                await client.update_collection(collection_name=self.collection, optimizer_config=qmodels.OptimizersConfigDiff(indexing_threshold=0))
+                await asyncio.to_thread(client.update_collection, collection_name=self.collection, optimizer_config=qmodels.OptimizersConfigDiff(indexing_threshold=0))
                 return {"success": True, "message": "Optimization triggered"}
             except Exception as e:
                 log.warning(f"optimize_collection failed: {e}")
@@ -984,7 +984,6 @@ class SupportAgent:
         self.qdrant = qdrant_service
         self.settings = settings
         self.lifecycle = lifecycle
-        # AI manager moved from legacy app - lazy-initializes its client
         self.ai_manager = AIManager(self.settings, self.embedding)
 
 
@@ -1041,7 +1040,6 @@ async def health():
         except Exception as e:
             basic_health["components"]["openai"] = {"status": "error", "error": str(e)}
 
-        # Database (project may not have a DB configured)
         try:
             # This project currently does not expose a DB setting; report as not configured
             basic_health["components"]["database"] = {"status": "not_configured"}
@@ -1113,7 +1111,10 @@ async def health_middleware():
 
 @app.route('/')
 async def index():
-    return await render_template('index.html')
+    # Pass a dynamic welcome prompt and demo flag to the template
+    welcome_prompt = get_welcome_prompt()
+    demo_mode = bool(getattr(settings, 'demo', False))
+    return await render_template('index.html', welcome_prompt=welcome_prompt, demo_mode=demo_mode)
 
 
 @app.route('/upload', methods=['POST'])
@@ -1186,10 +1187,10 @@ async def upload_file():
 
     try:
         log.info('Upserting %d points into collection %s', len(points), settings.qdrant_collection)
-        lifecycle.qdrant_client.upsert(collection_name=settings.qdrant_collection, points=points)
+        await asyncio.to_thread(lifecycle.qdrant_client.upsert, collection_name=settings.qdrant_collection, points=points)
         # Verify by counting points after upsert
         try:
-            count = lifecycle.qdrant_client.count(collection_name=settings.qdrant_collection)
+            count = await asyncio.to_thread(lifecycle.qdrant_client.count, collection_name=settings.qdrant_collection)
             log.info("After upsert, collection '%s' contains %s points", settings.qdrant_collection, getattr(count, 'count', count))
         except Exception:
             log.debug('Could not retrieve collection count after upsert')
@@ -1212,7 +1213,7 @@ async def list_documents():
     
     # Use QdrantService to list documents
     try:
-        docs = qdrant_service.list_documents()
+        docs = await qdrant_service.list_documents()
         return jsonify(docs)
     except Exception:
         return jsonify([])
@@ -1232,7 +1233,7 @@ async def get_document(doc_id):
     # For now, return points for that filename.
     # But filename may not be unique.
     # For simplicity, since demo, and Qdrant, perhaps return the chunks.
-    chunks = qdrant_service.get_document_chunks(doc_id)
+    chunks = await qdrant_service.get_document_chunks(doc_id)
     if not chunks:
         return jsonify({"error": "document not found"}), 404
 
@@ -1275,7 +1276,7 @@ async def search():
                 })
     else:
         # Use Qdrant search
-        search_res = lifecycle.qdrant_client.query_points(collection_name=settings.qdrant_collection, query=q_emb, limit=top_k)
+        search_res = await asyncio.to_thread(lifecycle.qdrant_client.query_points, collection_name=settings.qdrant_collection, query=q_emb, limit=top_k)
         for hit in search_res.points:
             payload = hit.payload or {}  # type: ignore
             score = getattr(hit, 'score', None)
@@ -1363,25 +1364,22 @@ async def optimize_store():
 
     if lifecycle.qdrant_client and not settings.demo:
         try:
-            # Trigger optimization (vacuum)
-            # This is specific to Qdrant's internal optimizer configuration
-            # Forcing an optimization is not always directly exposed via a simple method, 
-            # but we can try to update collection params to trigger it or just acknowledge.
-            # A common trick is to force a vacuum by setting vacuum_min_vector_number to something low then back? 
-            # Or just rely on the fact that this button is mostly for user reassurance/debugging.
-            # We will try to call update_collection with default optimizer config which might trigger a check.
             
-            # Since qdrant-client python wrapper is used:
-            # lifecycle.qdrant_client.update_collection(collection_name=settings.qdrant_collection, optimizer_config=models.OptimizersConfigDiff(vacuum_min_vector_number=...))
-            
-            # Simple "pass" for now with a log, unless we find a direct "optimize" method.
-            # Qdrant automatically optimizes. 
-            pass
+            # Attempt to trigger optimization via the higher-level service
+            log.info('Triggering Qdrant optimization via QdrantService')
+            try:
+                result = await qdrant_service.optimize_collection()
+                return jsonify(result)
+            except Exception as e:
+                log.exception('Failed to trigger optimization: %s', e)
+                return jsonify({"error": "optimization failed", "detail": str(e)}), 500
         except Exception:
             log.exception('Failed to optimize Qdrant collection')
             return jsonify({"error": "optimization failed"}), 500
             
     return jsonify({"status": "optimized"})
+
+@app.route('/reset', methods=['POST'])
 async def reset_store():
     # Admin auth required
     if settings.admin_token:
@@ -1393,13 +1391,25 @@ async def reset_store():
             return jsonify({'error': 'unauthorized'}), 401
 
     DOCUMENTS.clear()
+
+    # If a Qdrant client exists and we are not in demo mode, use the service to clear the collection
     if lifecycle.qdrant_client and not settings.demo:
         try:
-            # delete all points in collection (careful in prod)
-            lifecycle.qdrant_client.delete(collection_name=settings.qdrant_collection, points_selector=qmodels.Filter(must=[]))
-        except Exception:
-            log.exception('Failed to clear Qdrant collection')
-    return jsonify({"status": "cleared"})
+            result = await qdrant_service.clear_collection()
+            # result expected to be dict like {"success": True, "deleted": N} or {"success": False, "error": "..."}
+            if result.get('success'):
+                # include deleted count in response
+                deleted = result.get('deleted', 0)
+                return jsonify({"status": "cleared", "deleted": deleted, "message": f"Cleared {deleted} points."})
+            else:
+                log.warning('clear_collection reported failure: %s', result)
+                return jsonify({"error": result.get('error', 'failed to clear collection')}), 500
+        except Exception as e:
+            log.exception('Failed to clear Qdrant collection via service: %s', e)
+            return jsonify({"error": "failed to clear collection", "detail": str(e)}), 500
+
+    # Fallback response (no qdrant or demo mode)
+    return jsonify({"status": "cleared", "message": "All documents cleared (in-memory)."})
 
 
 @app.route('/document/<doc_id>', methods=['DELETE'])
@@ -1420,20 +1430,22 @@ async def delete_document(doc_id):
 
     # From Qdrant, use QdrantService to delete by filename
     try:
-        deleted_count = qdrant_service.delete_by_filename(doc_id)
+        deleted_count = await qdrant_service.delete_by_filename(doc_id)
         if deleted_count > 0:
             return jsonify({"status": "deleted", "deleted": deleted_count})
 
         # If deletion via scanning didn't find anything, try field filters as last resort
         try:
-            lifecycle.qdrant_client.delete(
+            await asyncio.to_thread(
+                lifecycle.qdrant_client.delete,
                 collection_name=settings.qdrant_collection,
                 points_selector=qmodels.Filter(must=[qmodels.FieldCondition(key="filename", match=qmodels.MatchValue(value=doc_id))])
             )
             return jsonify({"status": "deleted"})
         except Exception:
             try:
-                lifecycle.qdrant_client.delete(
+                await asyncio.to_thread(
+                    lifecycle.qdrant_client.delete,
                     collection_name=settings.qdrant_collection,
                     points_selector=qmodels.Filter(must=[qmodels.FieldCondition(key="file_name", match=qmodels.MatchValue(value=doc_id))])
                 )
