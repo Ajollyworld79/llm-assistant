@@ -82,6 +82,10 @@ class EnhancedCleanupMiddleware:
 
         self.gc_threshold_requests = 100
         self.requests_since_gc = 0
+        
+        # Emergency cleanup throttling
+        self.last_emergency_cleanup = 0
+        self.emergency_cleanup_cooldown = 300  # 5 minutes minimum between emergency cleanups
 
         logger.info("EnhancedCleanupMiddleware initialized")
 
@@ -111,12 +115,18 @@ class EnhancedCleanupMiddleware:
                 self.peak_memory_mb = mem
 
             # Emergency if memory crosses emergency fraction of critical threshold
+            # Only trigger if cooldown period has passed
+            now = time.monotonic()
             if mem > (self.memory_critical_threshold_mb * self.gc_emergency_threshold):
-                logger.warning(f"EMERGENCY memory usage: {mem:.1f} MB (threshold {self.gc_emergency_threshold * self.memory_critical_threshold_mb:.1f} MB)")
-                asyncio.create_task(self._emergency_cleanup())
+                if (now - self.last_emergency_cleanup) > self.emergency_cleanup_cooldown:
+                    logger.warning(f"EMERGENCY memory usage: {mem:.1f} MB (threshold {self.gc_emergency_threshold * self.memory_critical_threshold_mb:.1f} MB)")
+                    self.last_emergency_cleanup = now
+                    asyncio.create_task(self._emergency_cleanup())
             elif mem > self.memory_critical_threshold_mb:
-                logger.warning(f"CRITICAL memory usage: {mem:.1f} MB")
-                asyncio.create_task(self._emergency_cleanup())
+                if (now - self.last_emergency_cleanup) > self.emergency_cleanup_cooldown:
+                    logger.warning(f"CRITICAL memory usage: {mem:.1f} MB")
+                    self.last_emergency_cleanup = now
+                    asyncio.create_task(self._emergency_cleanup())
             elif mem > self.memory_warning_threshold_mb:
                 logger.warning(f"High memory usage: {mem:.1f} MB")
 
@@ -202,12 +212,13 @@ class EnhancedCleanupMiddleware:
     async def _emergency_cleanup(self) -> None:
         try:
             logger.warning("Running emergency cleanup")
-            # Aggressive GC - number of quick samples bounded by config
-            sample_count = min(3, getattr(self, 'gc_max_memory_samples', 3))
-            for _ in range(sample_count):
-                c = await asyncio.to_thread(gc.collect)
-                if c > 0:
-                    logger.info(f"Emergency GC collected {c} objects")
+            # Single aggressive GC pass to avoid slow-task warnings
+            c = await asyncio.to_thread(gc.collect)
+            if c > 0:
+                logger.info(f"Emergency GC collected {c} objects")
+            
+            # Yield control to event loop
+            await asyncio.sleep(0)
 
             # Clear tracked connections
             old = len(self.active_connections)
@@ -216,7 +227,7 @@ class EnhancedCleanupMiddleware:
             if old > 0:
                 logger.warning(f"Emergency: cleared {old} tracked connections")
 
-            # Use centralized gc_manager emergency if available
+            # Use centralized gc_manager emergency if available (it will do its own cleanup)
             if gc_manager is not None:
                 await gc_manager.emergency_cleanup()
 

@@ -191,17 +191,19 @@ class GarbageCollectionManager:
     async def emergency_cleanup(self):
         """Aggressive emergency cleanup."""
         self.logger.warning("[GC] Starting emergency cleanup")
-        for _ in range(min(3, max(1, int(self.gc_max_memory_samples)))):
-            try:
-                await asyncio.to_thread(gc.collect)
-            except Exception:
-                pass
+        # Single GC pass to avoid slow-task warnings
+        try:
+            collected = await asyncio.to_thread(gc.collect)
+            if collected > 0:
+                self.logger.info("[GC] Emergency collected %d objects", collected)
+        except Exception as e:
+            self.logger.debug("Emergency GC failed: %s", e)
+        
+        # Yield to event loop
+        await asyncio.sleep(0)
+        
         try:
             await self._clear_caches()
-        except Exception:
-            pass
-        try:
-            await self.run_garbage_collection(force=True)
         except Exception:
             pass
 
