@@ -3,7 +3,7 @@
 __pycache__/
 *.pyc
 *.log
-
+*.bak
 # node
 node_modules/
 dist/

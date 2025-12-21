@@ -15,23 +15,16 @@ from quart_cors import cors
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Tuple, cast
 import uuid
-import io
-import csv
 import time
 import asyncio
-import inspect
 import importlib
 import random
-import hashlib
-import math
 import logging
-import datetime                
+import datetime   
+import inspect             
 import gc
-import pandas as pd                
-import tempfile
 from functools import wraps
-from pypdf import PdfReader
-
+import re
 
 try:
     from .config import settings
@@ -40,7 +33,6 @@ try:
     from .module.lifecycle import lifecycle
     from .module.apimonitor import monitor
 except ImportError:
-
     import os, sys
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     if APP_DIR not in sys.path:
@@ -57,218 +49,45 @@ except ImportError:
     except Exception:
         gc_manager = None
 
-# Setup logging
+# Import refactored services
 try:
-    from .module.Functions_module import setup_logger
-    logger = setup_logger()
-except ImportError:
-    import logging
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
-    logger = logging.getLogger(__name__)
+    from .services.parser import parse_content, parser_service
+    from .services.ai import AIManager, DemoLLM
+    from .services.vector_store import (
+        QdrantService, QdrantAdapter, embedding_adapter, embedding_service, DOCUMENTS
+    )
+except ImportError as e:
+    try:
+        from services.parser import parse_content, parser_service
+        from services.ai import AIManager, DemoLLM
+        from services.vector_store import (
+            QdrantService, QdrantAdapter, embedding_adapter, embedding_service, DOCUMENTS
+        )
+    except ImportError as e2:
+        raise
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from qdrant_client import QdrantClient
-    from qdrant_client.http import models as qmodels
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qmodels
 
 try:
     from openai import AsyncAzureOpenAI
 except ImportError:
     AsyncAzureOpenAI = None
 
-
-class AIManager:
-    """Central AI manager for chat completions and parsing.
-
-    Provides:
-    - English system prompt tailored for a public portfolio demo
-    - Robust [SOURCE:X] parsing on the first line
-    - Graceful handling of content filter blocks
-    """
-
-    def __init__(self, settings, embeddings_module, client=None):
-        self.settings = settings
-        self.embeddings = embeddings_module
-        self._client = client
-
-    def initialize_client(self) -> None:
-        """Lazily initialize AsyncAzureOpenAI client if available."""
-        if self._client is None:
-            if AsyncAzureOpenAI is None:
-                logger.warning("AsyncAzureOpenAI is not available; AI calls will be disabled")
-                return
-            try:
-                self._client = AsyncAzureOpenAI(
-                    api_key=cast(str, getattr(self.settings, "azure_openai_api_key", "")),
-                    api_version=cast(str, getattr(self.settings, "azure_openai_api_version", "")),
-                    azure_endpoint=cast(str, getattr(self.settings, "azure_openai_endpoint", "")),
-                )
-                logger.info("AIManager: AsyncAzureOpenAI client initialized")
-            except Exception as e:
-                logger.exception("AIManager: failed to initialize client: %s", e)
-                self._client = None
-
-    async def ask_agent_with_context(self, query: str, context: str, conversation_history: Optional[list] = None) -> Tuple[str, Optional[int]]:
-        """Send query + context + (optional) history to the chat model.
-
-        Returns cleaned_text and source_indicator (0,1 or None). In demo mode, uses DemoLLM.
-        """
-        if conversation_history is None:
-            conversation_history = []
-
-        # Demo mode short-circuit
-        if getattr(self.settings, 'demo', False):
-            demo = DemoLLM()
-            try:
-                raw, src = await demo.generate(query, context)
-                cleaned, src2 = self._parse_and_clean_source(raw)
-                return cleaned, src2
-            except Exception as e:
-                logger.exception('DemoLLM failed: %s', e)
-                return ("(Demo) Sorry, demo generation failed.", None)
-
-        # Ensure client
-        if self._client is None:
-            self.initialize_client()
-        if self._client is None:
-            return ("Sorry, the assistant is currently unavailable.", None)
-
-        # Build system prompt and messages
-        max_ctx = int(getattr(self.settings, "MAX_CONTEXT_CHARS", 4000))
-        ctx = (context[:max_ctx] + "\n\n...[Truncated context]...") if context and len(context) > max_ctx else (context or "")
-
-        system_prompt = self._build_system_prompt(ctx)
-        messages = [{"role": "system", "content": system_prompt}]
-
-        # Conversation history
-        max_history = int(getattr(self.settings, "MAX_CONVERSATION_HISTORY", 6))
-        history_limit = min(len(conversation_history), max_history)
-        for msg in (conversation_history or [])[-history_limit:]:
-            if isinstance(msg, dict):
-                u = msg.get("user", "")
-                a = msg.get("assistant", "")
-                if u:
-                    messages.append({"role": "user", "content": u})
-                if a:
-                    messages.append({"role": "assistant", "content": a})
-
-        messages.append({"role": "user", "content": query})
-
-        try:
-            model = cast(str, getattr(self.settings, "azure_deployment_chat", ""))
-            if not model:
-                logger.warning("AIManager: no chat model configured; aborting request")
-                return ("Sorry, the assistant is not configured.", None)
-
-            temperature = float(getattr(self.settings, "TEMPERATURE", 0.3))
-            max_tokens = int(getattr(self.settings, "MAX_TOKENS", 512))
-
-            completion = await self._client.chat.completions.create(
-                model=model,
-                messages=cast(Any, messages),
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-
-            try:
-                raw = getattr(completion.choices[0].message, "content", "") or ""
-            except Exception:
-                raw = str(completion) if completion else ""
-
-            cleaned, source = self._parse_and_clean_source(raw)
-            return cleaned, source
-
-        except Exception as e:
-            txt = str(e).lower()
-            if "content_filter" in txt or "responsibleaipolicyviolation" in txt or (hasattr(e, "status_code") and getattr(e, "status_code", None) == 400):
-                return "__CONTENT_FILTER_BLOCKED__", None
-            logger.exception("AIManager: ask_agent_with_context failed: %s", e)
-            return ("Sorry, something went wrong with the assistant.", None)
-
-    def _parse_and_clean_source(self, response_text: str) -> Tuple[str, Optional[int]]:
-        """Parse a leading [SOURCE:X] marker (only when it occurs on the FIRST non-empty line).
-
-        Returns (cleaned_text, source_index) where source_index is 0,1 or None.
-        """
-        if not response_text:
-            return response_text, None
-
-        # Only consider a SOURCE marker on the first non-empty line
-        lines = response_text.splitlines()
-        for i, line in enumerate(lines):
-            if line.strip() == '':
-                continue
-            m = re.match(r'^\s*\**\s*\[SOURCE:(?P<s>[01])\]\s*\**\s*(?P<rest>.*)', line, flags=re.S)
-            if m:
-                rest = m.group('rest') or ''
-                # Rebuild remaining lines after the first line
-                remaining = '\n'.join([rest] + lines[i+1:])
-                return remaining.strip(), int(m.group('s'))
-            break
-        return response_text.strip(), None
-
-    def _build_system_prompt(self, context: str) -> str:
-        """English system prompt for the public demo assistant."""
-        base = (
-            "You are a concise, factual, and safety-aware assistant for a public demo. "
-            "Answer clearly in English and use Markdown when helpful. Do not invent links or confidential info.\n\n"
-        )
-        base += "CONTEXT: " + (context if context else "[None]")
-        base += "\n\nIf the answer comes from provided documents, PREFIX the response on the first line with [SOURCE:0]. "
-        base += "If it comes from general knowledge, PREFIX the response on the first line with [SOURCE:1].\n"
-        return base
-
-
-class DemoLLM:
-    """Deterministic demo-mode LLM emulator.
-
-    Returns short, deterministic answers built from provided context and marks
-    a SOURCE (0 or 1) heuristically.
-    """
-
-    def __init__(self, max_chars: int = 800):
-        self.max_chars = max_chars
-
-    async def generate(self, query: str, context: str) -> tuple[str, Optional[int]]:
-        # If no context, return a helpful demo message
-        if not context or not context.strip():
-            return ("I have no documents to answer from. Try uploading or adding documents.", None)
-
-        # Pick up to 3 blocks separated by paragraphs
-        parts = [p.strip() for p in context.split("\n\n") if p.strip()][:3]
-        body = "\n\n".join(parts)
-        if len(body) > self.max_chars:
-            body = body[: self.max_chars - 3].rstrip() + "..."
-
-        # Heuristic source selection
-        lower = body.lower()
-        source = 1 if "microsoft" in lower or "windows" in lower or "office" in lower else 0
-
-        # Return in the same style as the real LLM (with SOURCE on first line)
-        text = f"[SOURCE:{source}]\n{body}"
-        return text, source
-
-# Optional Qdrant imports for typing
+# Setup logging
 try:
-    from qdrant_client import QdrantClient
-    from qdrant_client.http import models as qmodels
+    from .module.Functions_module import setup_logger
+    logger = setup_logger()
 except ImportError:
-    pass # Managed by lifecycle
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+    logger = logging.getLogger(__name__)
+
 
 app = Quart(__name__, template_folder='../templates', static_folder='../static')
 app = cors(app, allow_origin="*")
 
 # Register Middleware
 setup_middleware(app)
-
-# In-memory store (for demo or fallback)
-DOCUMENTS: List[Dict[str, Any]] = []
-
-# Helper: simple chunker / cleanup
-def _clean_text(t: str) -> str:
-    return t.replace('\r', '\n').strip()
-
 
 DEMO_BANNER = "Demo mode — results are simulated; no active LLM connection."
 EMBED_DIM = settings.embedding_dim
@@ -286,7 +105,6 @@ CONTENT_FILTER_RESPONSE = (
 )
 
 
-
 def get_welcome_prompt() -> str:
     """Return the welcome message shown on the index page (demo-aware)."""
     base = "Hello! I'm your AI assistant powered by Qdrant. Upload documents to the Knowledge Base to get started, or ask me questions about existing data."
@@ -298,388 +116,11 @@ def get_welcome_prompt() -> str:
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
+    simulate_latency: bool = True
+    filters: Optional[Dict[str, Any]] = None # Added for Metadata Filtering
 
 
-import re
-
-async def chunk_text_async(text: str, chunk_size: int = 200, overlap: int = 50) -> List[str]:
-    return await embedding_service.chunk_text_async(text, chunk_size=chunk_size, overlap=overlap)
-
-def chunk_text(text: str, chunk_size: int = 200, overlap: int = 50) -> List[str]:
-    return embedding_service.chunk_text(text, chunk_size=chunk_size, overlap=overlap)
-
-
-class EmbeddingService:
-    """Helper for deterministic embeddings and chunking logic."""
-
-    def __init__(self, dim: int = EMBED_DIM):
-        self.dim = dim
-
-    def deterministic_embed(self, text: str) -> List[float]:
-        # Deterministic embedding using md5 digest split into numbers
-        h = hashlib.md5(text.encode('utf-8')).digest()
-        vals = []
-        # expand digest to dim by repeating and combining
-        while len(vals) < self.dim:
-            for b in h:
-                vals.append(b / 255.0)
-                if len(vals) >= self.dim:
-                    break
-            h = hashlib.md5(h).digest()
-        # normalize vector
-        norm = math.sqrt(sum(v * v for v in vals)) or 1.0
-        return [v / norm for v in vals]
-
-    def cosine_sim(self, a: List[float], b: List[float]) -> float:
-        return sum(x * y for x, y in zip(a, b))
-
-    async def chunk_text_async(self, text: str, chunk_size: int = 200, overlap: int = 50) -> List[str]:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.chunk_text, text, chunk_size, overlap)
-
-    def chunk_text(self, text: str, chunk_size: int = 200, overlap: int = 50) -> List[str]:
-        """Chunk text by sentences into near chunk_size words with overlap.
-        This gives more natural breaks than raw word slicing."""
-        # Normalize whitespace
-        text = re.sub(r"\s+", " ", text).strip()
-        if not text:
-            return []
-        # Split into sentences (simple heuristic)
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        chunks = []
-        current = []
-        current_words = 0
-        for s in sentences:
-            sw = len(s.split())
-            if current_words + sw <= chunk_size or not current:
-                current.append(s)
-                current_words += sw
-            else:
-                chunks.append(' '.join(current))
-                # start next chunk with overlap sentences (approx by words)
-                # carry over last sentences until overlap words satisfied
-                carry = []
-                carry_words = 0
-                j = len(current) - 1
-                while j >= 0 and carry_words < overlap:
-                    sentence_j = current[j]
-                    carry.insert(0, sentence_j)
-                    carry_words += len(sentence_j.split())
-                    j -= 1
-                current = carry + [s]
-                current_words = sum(len(x.split()) for x in current)
-        if current:
-            chunks.append(' '.join(current))
-        return chunks
-
-
-# Single instance for compatibility with existing code
-embedding_service = EmbeddingService()
-
-
-def deterministic_embed(text: str) -> List[float]:
-    return embedding_service.deterministic_embed(text)
-
-
-def cosine_sim(a: List[float], b: List[float]) -> float:
-    return embedding_service.cosine_sim(a, b)
-
-
-class ParserService:
-    """Service responsible for extracting text and links from uploaded files.
-
-    This encapsulates the previous free-function `parse_content` and provides a
-    single, testable interface for file parsing.
-    """
-
-    def __init__(self):
-        self.logger = logger
-
-    def parse_content(self, filename: str, content: bytes) -> str:
-
-        lower = filename.lower()
-
-        try:
-            # Plain text and markdown
-            if lower.endswith('.txt') or lower.endswith('.md'):
-                return content.decode('utf-8', errors='replace')
-
-            # Enhanced CSV parsing: try pandas if available for better formats
-            elif lower.endswith('.csv'):
-                s = content.decode('utf-8', errors='replace')
-                try:
-
-                    # Try to detect a header-oriented CSV with semicolon separators
-                    lines = s.splitlines()
-                    csv_start = 0
-                    gruppe_navn = ''
-                    found_header = False
-
-                    for i, line in enumerate(lines):
-                        line = line.strip()
-                        if line.startswith('Sheet:'):
-                            gruppe_navn = line.replace('Sheet:', '').strip()
-                        elif ';' in line or ',' in line:
-                            csv_start = i
-                            found_header = True
-                            break
-
-                    csv_lines = '\n'.join(lines[csv_start:]) if found_header else s
-
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as tmpf:
-                        tmpf.write(csv_lines)
-                        tmp_path = tmpf.name
-
-                    try:
-                        # Prefer semicolon when present
-                        sep = ';' if ';' in csv_lines else ','
-                        df = pd.read_csv(tmp_path, sep=sep, encoding='utf-8')
-                        content_out = f"**Data from {filename}**\n\n"
-
-                        for _, row in df.iterrows():
-                            row_data = []
-                            for col in df.columns:
-                                val = row[col]
-                                if pd.notna(val):
-                                    row_data.append(f"{col}: {val}")
-                            content_out += ' | '.join(row_data) + '\n'
-
-                        try:
-                            import os as _os
-                            _os.unlink(tmp_path)
-                        except Exception:
-                            pass
-
-                        return content_out
-                    except Exception:
-                        # Fallback to simple csv reader
-                        rows = list(csv.reader(io.StringIO(s)))
-                        lines = [', '.join(row) for row in rows]
-                        return '\n'.join(lines)
-                except Exception:
-                    # pandas or tempfile not available - simple fallback
-                    rows = list(csv.reader(io.StringIO(s)))
-                    lines = [', '.join(row) for row in rows]
-                    return '\n'.join(lines)
-
-            # PDF parsing with link extraction
-            if lower.endswith('.pdf'):
-                try:
-                    text_parts = []
-                    links = []
-
-                    try:
-                        # Prefer pypdf for link extraction and robust text
-                        
-                        reader = PdfReader(io.BytesIO(content))
-                        for i, page in enumerate(reader.pages, start=1):
-                            try:
-                                page_text = page.extract_text() or ''
-                                if page_text.strip():
-                                    text_parts.append(page_text)
-                            except Exception:
-                                pass
-
-                            # Extract annotations/links if present
-                            try:
-                                annots_obj = page.get('/Annots')  # type: ignore[reportGeneralTypeIssues]
-                                if annots_obj:
-                                    # annots_obj may be an array-like PdfObject; iterate defensively
-                                    try:
-                                        for a in annots_obj:
-                                            try:
-                                                obj = a.get_object()
-                                                if obj.get('/Subtype') == '/Link' and '/A' in obj:
-                                                    action = obj['/A']
-                                                    if action.get('/S') == '/URI' and '/URI' in action:
-                                                        uri = action['/URI']
-                                                        links.append(f"Link (side {i}): {uri}")
-                                            except Exception:
-                                                continue
-                                    except TypeError:
-                                        # Not iterable - try single object handling
-                                        try:
-                                            a = annots_obj
-                                            obj = a.get_object()
-                                            if obj.get('/Subtype') == '/Link' and '/A' in obj:
-                                                action = obj['/A']
-                                                if action.get('/S') == '/URI' and '/URI' in action:
-                                                    uri = action['/URI']
-                                                    links.append(f"Link (side {i}): {uri}")
-                                        except Exception:
-                                            pass
-                            except Exception:
-                                # Some pdf versions have different structures; ignore
-                                pass
-
-                    except Exception:
-                        # Fallback to pdfplumber for text only (no annotations extraction)
-                        try:
-                            import pdfplumber
-                            with pdfplumber.open(io.BytesIO(content)) as pdf:
-                                for page in pdf.pages:
-                                    txt = page.extract_text() or ''
-                                    if txt.strip():
-                                        text_parts.append(txt)
-                                    else:
-                                        # Try OCR fallback if pytesseract is available
-                                        try:
-                                            from PIL import Image
-                                            import pytesseract
-                                            img = page.to_image(resolution=150).original
-                                            ocr_txt = pytesseract.image_to_string(img)
-                                            text_parts.append(ocr_txt)
-                                        except Exception:
-                                            pass
-                        except Exception:
-                            return f"[Simulated PDF parsing for {filename} - pdf parsing libraries missing or failed]"
-
-                    combined = '\n'.join([p for p in text_parts if p and p.strip()])
-
-                    if links:
-                        combined += '\n\n**Links from PDF document:**\n'
-                        for l in links:
-                            combined += f"- {l}\n"
-
-                    if combined.strip() == '':
-                        return f"[Simulated PDF parsing for {filename} - no text extracted]"
-
-                    return combined
-                except Exception as e:
-                    self.logger.exception('PDF parsing error: %s', e)
-                    return f"[Simulated PDF parsing for {filename} - error]"
-
-            # DOCX parsing with link extraction
-            elif lower.endswith('.docx'):
-                try:
-                    from docx import Document
-
-                    doc = Document(io.BytesIO(content))
-                    parts = []
-
-                    # Extract paragraphs
-                    for para in doc.paragraphs:
-                        if para.text and para.text.strip():
-                            parts.append(para.text.strip())
-
-                    # Extract hyperlinks using rels
-                    try:
-                        all_hyperlinks = {}
-                        for rel in doc.part.rels.values():
-                            if 'hyperlink' in rel.reltype:
-                                all_hyperlinks[rel.rId] = rel.target_ref
-
-                        all_document_links = []
-                        for paragraph in doc.paragraphs:
-                            try:
-                                for hyperlink in paragraph._element.findall(
-                                    './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink'
-                                ):
-                                    rel_id = hyperlink.get(
-                                        '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
-                                    )
-                                    if rel_id in all_hyperlinks:
-                                        url = all_hyperlinks[rel_id]
-                                        link_text = ''.join(node.text for node in hyperlink.iter() if node.text).strip()
-                                        if url and link_text:
-                                            all_document_links.append((link_text, url))
-                            except Exception:
-                                pass
-
-                        if all_document_links:
-                            links_section = '\n\n**Links from document:**\n' + '\n'.join([f"- {text}: {url}" for text, url in all_document_links])
-                            parts.append(links_section)
-                    except Exception:
-                        # Ignore link extraction failures
-                        pass
-
-                    # Tables
-                    try:
-                        for table in doc.tables:
-                            for row in table.rows:
-                                for cell in row.cells:
-                                    cell_text = cell.text.strip()
-                                    if cell_text:
-                                        parts.append(cell_text)
-                    except Exception:
-                        pass
-
-                    return '\n'.join(parts)
-                except Exception:
-                    return f"[Simulated DOCX parsing for {filename} - python-docx missing or failed]"
-
-            # PPTX slides
-            elif lower.endswith('.pptx'):
-                try:
-                    from pptx import Presentation
-                    prs = Presentation(io.BytesIO(content))
-                    text = ''
-                    for slide_num, slide in enumerate(prs.slides, 1):
-                        text += f"\n--- Slide {slide_num} ---\n"
-                        for shape in slide.shapes:
-                            shape_text = getattr(shape, "text", None)
-                            if shape_text:
-                                text += shape_text + "\n"
-                    return text
-                except Exception:
-                    return f"[Simulated PPTX parsing for {filename} - python-pptx missing or failed]"
-
-            # URL shortcut files (.url)
-            elif lower.endswith('.url'):
-                try:
-                    text = content.decode('utf-8', errors='replace')
-                    url = None
-                    for line in text.splitlines():
-                        line = line.strip()
-                        if line.upper().startswith('URL='):
-                            url = line[4:]
-                            break
-
-                    if url:
-                        import urllib.parse
-                        parsed = urllib.parse.urlparse(str(url))
-                        domain = str(parsed.netloc) or 'Unknown domain'
-                        filename_without_ext = filename.rsplit('.', 1)[0].replace('_', ' ')
-
-                        content_out = f"**{filename_without_ext}**\n\n"
-                        content_out += f"Type: Internet Link / Shortcut\n"
-                        content_out += f"Description: This is a link to {filename_without_ext}.\n"
-
-                        if 'powerbi.com' in domain:
-                            content_out += "This is a Power BI report link.\n"
-                        elif 'sharepoint.com' in domain:
-                            content_out += "This is a SharePoint link.\n"
-
-                        content_out += f"\nLink: [{filename_without_ext}]({url})\n"
-                        content_out += f"\nKeywords: {filename_without_ext}, link, shortcut, URL\n"
-
-                        return content_out
-                    else:
-                        return f"Internet shortcut: {filename}"
-
-                except Exception as e:
-                    logger.exception('Error parsing URL file: %s', e)
-                    return f"URL shortcut: {filename}"
-
-            # Fallback
-            else:
-                return f"[Simulated parsing for {filename} - demo mode]\nContent not extracted."
-
-        except Exception as e:
-            logger.exception('Error parsing content: %s', e)
-            return f"[Error parsing {filename}, using fallback text.]"
-
-# Create a single global parser instance for convenience
-parser_service = ParserService()
-
-async def parse_content(filename: str, content: bytes) -> str:
-    """Compatibility wrapper that delegates to the shared ParserService.
-    Runs the blocking parser in a separate thread to avoid blocking the event loop.
-    """
-    return await asyncio.to_thread(parser_service.parse_content, filename, content)
-
-
-# ------------------------- New helper classes (portfolio demo) -------------------------
+# ------------------------- Helper classes (portfolio demo) -------------------------
 class DomainClassifier:
     """Lightweight domain classifier for demo: IT vs non-IT vs math."""
 
@@ -758,476 +199,15 @@ class AuthManager:
 
         return decorated_function
 
-
-class EmbeddingAdapter:
-    """Adapter to produce embeddings: deterministic demo or call project's `embeddings` module."""
-
-    def __init__(self, settings, embedding_service):
-        self.settings = settings
-        self.embedding_service = embedding_service
-
-    async def embed_texts(self, texts: list[str], provider: Optional[str] = None, context: Optional[str] = None) -> list[list[float]]:
-        # Demo mode: deterministic embedding
-        if getattr(self.settings, 'demo', False):
-            # run deterministic embedding synchronously but in thread to avoid blocking
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, lambda: [self.embedding_service.deterministic_embed(t) for t in texts])
-
-        try:
-            # Prefer project's embeddings.embed_texts if available
-            prov = provider if provider is not None else getattr(self.settings, 'embedding_provider', "")
-            # Ensure we pass a string (avoid passing None which some implementations may not accept)
-            prov = str(prov) if prov is not None else ""
-            return await embeddings.embed_texts(texts, provider=prov, context=context)
-        except Exception as e:
-            logger.warning('EmbeddingAdapter falling back to deterministic due to: %s', e)
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, lambda: [self.embedding_service.deterministic_embed(t) for t in texts])
-
-
-class QdrantAdapter:
-    """Thin adapter to upsert/delete/list vectors in Qdrant or use in-memory fallback."""
-
-    def __init__(self, lifecycle_obj, collection_name: str):
-        self.lifecycle = lifecycle_obj
-        self.collection = collection_name
-
-    def is_available(self) -> bool:
-        return bool(getattr(self.lifecycle, 'qdrant_client', None))
-
-    async def upsert_document_vectors(self, doc_id: str, filename: str, chunks: list[dict]):
-        """Chunks: list of {'text': str, 'vector': list[float], 'chunk_index': int}
-        Returns number of upserted points or raises.
-        """
-        client = getattr(self.lifecycle, 'qdrant_client', None)
-        if not client:
-            # fallback: store in in-memory DOCUMENTS
-            existing = next((d for d in DOCUMENTS if d['id'] == doc_id), None)
-            if existing:
-                existing['chunks'] = [{'text': c['text'], 'embed': c['vector']} for c in chunks]
-                return len(chunks)
-            DOCUMENTS.append({
-                'id': doc_id,
-                'filename': filename,
-                'text': ' '.join([c.get('text','') for c in chunks]),
-                'chunks': [{'text': c['text'], 'embed': c['vector']} for c in chunks],
-                'uploaded_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                'type': filename.split('.')[-1].upper() if '.' in filename else 'FILE'
-            })
-            return len(chunks)
-
-        # Prepare points using qmodels if available
-        points = []
-        skipped = 0
-        try:
-            for c in chunks:
-                vec = c.get('vector') or c.get('embed')
-                txt = c.get('text','')
-
-                # If vector is missing, attempt deterministic embed as a best-effort fallback
-                if vec is None:
-                    try:
-                        vec = embedding_service.deterministic_embed(txt)
-                        logger.debug('QdrantAdapter: computed deterministic embedding for missing vector (filename=%s)', filename)
-                    except Exception:
-                        logger.warning('QdrantAdapter: missing vector and deterministic embed failed; skipping chunk (filename=%s)', filename)
-                        skipped += 1
-                        continue
-
-                # Ensure vector is a plain Python list of floats
-                try:
-                    if not isinstance(vec, list):
-                        vec = list(vec)
-                except Exception:
-                    try:
-                        vec = [float(v) for v in vec]
-                    except Exception:
-                        logger.warning('QdrantAdapter: vector not iterable/convertible; skipping chunk (filename=%s)', filename)
-                        skipped += 1
-                        continue
-
-                idx = c.get('chunk_index', 0)
-                payload = {
-                    'filename': filename,
-                    'chunk_index': idx,
-                    'text': txt,
-                    'uploaded_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                    'type': filename.split('.')[-1].upper() if '.' in filename else 'FILE'
-                }
-
-                if 'qmodels' in globals():
-                    try:
-                        points.append(qmodels.PointStruct(id=str(uuid.uuid4()), vector=vec, payload=payload))
-                    except Exception as e:
-                        logger.warning('qmodels.PointStruct construction failed, falling back to dict point: %s', e)
-                        points.append({'id': str(uuid.uuid4()), 'vector': vec, 'payload': payload})
-                else:
-                    # fallback: point as dict
-                    points.append({'id': str(uuid.uuid4()), 'vector': vec, 'payload': payload})
-
-            if not points:
-                logger.warning('QdrantAdapter: no valid points to upsert (all chunks skipped) for filename=%s', filename)
-                return 0
-
-            # Upsert using client in a thread
-            await asyncio.to_thread(client.upsert, collection_name=self.collection, points=points)
-            return len(points)
-        except Exception as e:
-            logger.exception('Failed to upsert vectors: %s', e)
-            raise
-
-
-# Instantiate helpers for use in endpoints
+# Instantiate helpers
 domain_classifier = DomainClassifier()
 validation_manager = ValidationManager(domain_classifier)
 auth_manager = AuthManager(settings)
-embedding_adapter = EmbeddingAdapter(settings, embedding_service)
-qdrant_adapter = QdrantAdapter(lifecycle, settings.qdrant_collection)
 
-# ------------------------- End helper classes -------------------------
-
-
-class QdrantService:
-    """Wrapper for common Qdrant operations used by endpoints."""
-
-    def __init__(self, lifecycle_obj):
-        self.lifecycle = lifecycle_obj
-        self.collection = settings.qdrant_collection
-
-    def is_available(self) -> bool:
-        return bool(self.lifecycle.qdrant_client)
-
-    async def scroll(self, limit: int = 2000):
-        try:
-            return await asyncio.to_thread(self.lifecycle.qdrant_client.scroll, collection_name=self.collection, limit=limit)
-        except Exception:
-            return ([], None)
-
-    async def list_documents(self):
-        if not self.is_available():
-            return []
-        try:
-            res, _ = await self.scroll(limit=2000)
-        except Exception:
-            return []
-
-        unique_files = {}
-        for hit in res or []:
-            payload = getattr(hit, 'payload', {}) or {}
-            fname = payload.get('filename') or payload.get('file_name') or 'unknown'
-            if fname not in unique_files:
-                unique_files[fname] = {
-                    "id": fname,
-                    "filename": fname,
-                    "chunks": 0,
-                    "uploaded_at": payload.get('uploaded_at', 'N/A'),
-                    "type": payload.get('type', 'FILE')
-                }
-            unique_files[fname]["chunks"] += 1
-
-        return list(unique_files.values())
-
-    async def get_document_chunks(self, doc_id: str):
-        if not self.is_available():
-            return []
-        try:
-            res, _ = await asyncio.to_thread(self.lifecycle.qdrant_client.scroll, collection_name=self.collection, limit=1000)
-        except Exception:
-            return []
-
-        chunks = []
-        for hit in res or []:
-            payload = getattr(hit, 'payload', {}) or {}
-            if payload.get('filename') == doc_id or payload.get('file_name') == doc_id:
-                chunks.append({"text": payload.get('text', ''), "chunk_index": payload.get('chunk_index', 0)})
-
-        return chunks
-
-    async def delete_by_filename(self, doc_id: str) -> int:
-        """Delete all points whose payload filename/file_name matches doc_id.
-        Returns number of deleted points (best-effort)."""
-        if not self.is_available():
-            return 0
-
-        try:
-            scroll_res = await asyncio.to_thread(self.lifecycle.qdrant_client.scroll, collection_name=self.collection, limit=10000)
-            all_points = scroll_res[0] if scroll_res else []
-        except Exception:
-            all_points = []
-
-        ids_to_delete = []
-        for point in all_points:
-            payload = getattr(point, 'payload', {}) or {}
-            if payload.get('filename') == doc_id or payload.get('file_name') == doc_id:
-                ids_to_delete.append(point.id)
-
-        if ids_to_delete:
-            await asyncio.to_thread(self.lifecycle.qdrant_client.delete, collection_name=self.collection, points_selector=ids_to_delete)
-
-        return len(ids_to_delete)
-
-    def initialize_client(self) -> None:
-        """Initialize Qdrant client with safe persistent local storage."""
-        try:
-            # Prefer lifecycle-managed client if available
-            client = getattr(self.lifecycle, 'qdrant_client', None)
-            if client:
-                # Keep a short local reference
-                self.lifecycle.qdrant_client = client
-                return
-
-            # If lifecycle does not have a client, attempt to create a path-based client
-            qdrant_path = os.path.join(os.path.dirname(__file__), 'qdrant_db')
-            os.makedirs(qdrant_path, exist_ok=True)
-            from qdrant_client import QdrantClient as _QdrantClient
-            # Note: we prefer file-backed path for local persistence when possible
-            try:
-                self.lifecycle.qdrant_client = _QdrantClient(path=qdrant_path)
-                logger.info(f"Qdrant client initialized at {qdrant_path}")
-            except Exception as e:
-                logger.warning(f"Could not initialize local Qdrant client: {e}")
-        except Exception as e:
-            logger.error(f"Qdrant initialize_client error: {e}")
-
-    async def setup_collection(self) -> bool:
-        """Ensure the collection exists and mark it as ready. Returns True if ready."""
-        try:
-            client = getattr(self.lifecycle, 'qdrant_client', None)
-            if client is None:
-                logger.warning("Qdrant client not available - cannot setup collection")
-                return False
-
-            try:
-                collection_info = await asyncio.to_thread(client.get_collection, self.collection)
-                logger.info(f"Qdrant collection '{self.collection}' ready: {collection_info.points_count} points")
-                self.collection_ready = True
-                return True
-            except Exception as e:
-                logger.info(f"Qdrant collection '{self.collection}' not present or unusable: {e}")
-                self.collection_ready = False
-                return False
-        except Exception as e:
-            logger.error(f"setup_collection error: {e}")
-            return False
-
-    def preprocess_query(self, query_text: str) -> str:
-        """Preprocess query to expand common terms for better matching (English)."""
-        try:
-            query = " ".join(query_text.strip().split())
-
-            synonyms = {
-                "office": "Office 365 Microsoft 365",
-                "teams": "Microsoft Teams",
-                "outlook": "Microsoft Outlook",
-                "word": "Microsoft Word",
-                "excel": "Microsoft Excel",
-                "powerpoint": "Microsoft PowerPoint",
-                "sharepoint": "Microsoft SharePoint",
-                "onedrive": "OneDrive",
-                "login": "log in login access password account",
-                "printer": "printer print printing",
-                "internet": "network wifi connection",
-                "mail": "email outlook",
-                "password": "password change reset update",
-                "reset": "reset restart reboot",
-            }
-
-            q_lower = query.lower()
-            for term, extras in synonyms.items():
-                if term in q_lower:
-                    query += f" {extras}"
-
-            return query
-        except Exception:
-            return query_text
-
-    async def search_index(self, query_text: str, top_k: int | None = None) -> dict:
-        """Search the vector index with retries, returns context and sources."""
-        try:
-            if top_k is None:
-                top_k = int(getattr(settings, 'TOP_K_RESULTS', 5))
-
-            await self.setup_collection()
-
-            processed_query = self.preprocess_query(query_text)
-
-            # Generate embedding (use project's embeddings helper if available)
-            emb_list = await embedding_adapter.embed_texts([processed_query], provider=settings.embedding_provider, context=f"search:{processed_query[:80]}")
-            if not emb_list:
-                return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
-            vector = emb_list[0]
-
-            client = getattr(self.lifecycle, 'qdrant_client', None)
-            if client is None:
-                logger.error("Qdrant client not available - cannot search")
-                return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
-
-            # Retry with exponential backoff
-            max_retries = 3
-            base_delay = 0.5
-            results = None
-            for attempt in range(max_retries):
-                try:
-                    # Use search API if present or fallback to query_points
-                    if hasattr(client, 'search'):
-                        results = await asyncio.to_thread(client.search, collection_name=self.collection, query_vector=vector, limit=min(top_k*2, getattr(settings, 'MAX_SEARCH_LIMIT', 100)), score_threshold=getattr(settings, 'QDRANT_SCORE_THRESHOLD', 0.0))
-                        # client.search returns list-like results
-                    else:
-                        # query_points for older client
-                        res = await asyncio.to_thread(client.query_points, collection_name=self.collection, query=vector, limit=top_k*2)
-                        results = getattr(res, 'results', res)
-                    break
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        delay = base_delay * (2 ** attempt)
-                        logger.warning(f"Qdrant search attempt {attempt+1} failed: {e}. Retrying in {delay}s")
-                        await asyncio.sleep(delay)
-                    else:
-                        logger.error(f"Qdrant search failed after {max_retries} attempts: {e}")
-                        return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
-
-            # Format results into context and sources
-            chunks = []
-            source_docs = []
-            seen_titles = set()
-
-            if results:
-                # results may be iterable of hits
-                for hit in results:
-                    payload = getattr(hit, 'payload', {}) or {}
-                    score = getattr(hit, 'score', None) or 0.0
-                    text = payload.get('text', '')
-                    title_src = payload.get('file_name') or payload.get('filename') or 'Document'
-                    title = title_src.replace('.pdf','').replace('.docx','').replace('_',' ')
-
-                    # Apply simple score threshold if present
-                    threshold = float(getattr(settings, 'SIMILARITY_THRESHOLD', 0.0))
-                    try:
-                        if float(score) <= threshold:
-                            continue
-                    except Exception:
-                        pass
-
-                    if text:
-                        if title not in seen_titles:
-                            source_docs.append({"title": title, "similarity_score": round(float(score), 3)})
-                            seen_titles.add(title)
-
-                        if title and title.lower() not in text[:100].lower():
-                            chunks.append(f"**{title}**\n\n{text}")
-                        else:
-                            chunks.append(text)
-
-                    if len(source_docs) >= top_k:
-                        break
-
-            return {"context": "\n\n".join(chunks), "sources": source_docs, "embedding_time": 0.0, "search_time": 0.0}
-        except Exception as e:
-            logger.error(f"search_index error: {e}")
-            return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
-
-    def set_loading_state(self, is_loading: bool, operation: str = "", total_docs: int = 0) -> None:
-        """Set loading state to inform users about long-running operations."""
-        if is_loading:
-            self.loading_state = {
-                "is_loading": True,
-                "start_time": time.time(),
-                "total_documents": total_docs,
-                "processed_documents": 0,
-                "current_operation": operation,
-                "estimated_completion": time.time() + (total_docs * 2),
-            }
-        else:
-            self.loading_state = {
-                "is_loading": False,
-                "start_time": None,
-                "total_documents": 0,
-                "processed_documents": 0,
-                "current_operation": "",
-                "estimated_completion": None,
-            }
-            gc.collect()
-
-    def get_loading_message(self) -> str | None:
-        """Return a friendly English loading message when the index is being updated."""
-        if not self.loading_state.get("is_loading"):
-            return None
-
-        messages = [
-            "I'm updating my knowledge base - please check back in {time} minutes!",
-            "Processing new documents now, give me {time} minutes and I'll be ready!",
-            "Index update in progress - come back in about {time} minutes."
-        ]
-
-        if self.loading_state.get("estimated_completion"):
-            remaining = max(1, int((self.loading_state["estimated_completion"] - time.time()) / 60))
-        else:
-            remaining = 5
-        remaining = max(1, remaining + random.randint(-1, 2))
-
-        msg = random.choice(messages)
-        return msg.format(time=remaining)
-
-    def update_loading_progress(self, processed_docs: int) -> None:
-        if self.loading_state.get("is_loading"):
-            self.loading_state["processed_documents"] = processed_docs
-            if processed_docs > 0 and self.loading_state.get("start_time"):
-                elapsed = time.time() - self.loading_state["start_time"]
-                avg = elapsed / processed_docs
-                remaining = max(0, self.loading_state.get("total_documents", 0) - processed_docs)
-                self.loading_state["estimated_completion"] = time.time() + (remaining * avg)
-
-    async def clear_collection(self) -> dict:
-        """Delete all points from the collection by scrolling and deleting in batches."""
-        try:
-            client = getattr(self.lifecycle, 'qdrant_client', None)
-            if client is None:
-                return {"success": False, "error": "Qdrant client not available"}
-
-            self.set_loading_state(True, "Clearing collection", 0)
-            total_deleted = 0
-            offset = None
-            batch_size = 100
-
-            while True:
-                scroll_result = await asyncio.to_thread(client.scroll, collection_name=self.collection, limit=batch_size, offset=offset, with_payload=False, with_vectors=False)
-                points, next_offset = scroll_result
-                if not points:
-                    break
-                ids = [p.id for p in points]
-                await asyncio.to_thread(client.delete, collection_name=self.collection, points_selector=ids)
-                total_deleted += len(ids)
-                offset = next_offset
-                if next_offset is None:
-                    break
-
-            self.set_loading_state(False)
-            return {"success": True, "deleted": total_deleted}
-        except Exception as e:
-            self.set_loading_state(False)
-            logger.error(f"clear_collection error: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def optimize_collection(self) -> dict:
-        """Trigger collection optimization (best-effort)."""
-        try:
-            client = getattr(self.lifecycle, 'qdrant_client', None)
-            if client is None:
-                return {"success": False, "error": "Qdrant client not available"}
-
-            try:
-                await asyncio.to_thread(client.update_collection, collection_name=self.collection, optimizer_config=qmodels.OptimizersConfigDiff(indexing_threshold=0))
-                return {"success": True, "message": "Optimization triggered"}
-            except Exception as e:
-                logger.warning(f"optimize_collection failed: {e}")
-                return {"success": False, "error": str(e)}
-        except Exception as e:
-            logger.error(f"optimize_collection error: {e}")
-            return {"success": False, "error": str(e)}
-
-
-# Single instance for endpoints to use
+# Single instance for endpoints to use (dependency injection manually)
 qdrant_service = QdrantService(lifecycle)
+# QdrantAdapter also needs lifecycle
+qdrant_adapter = QdrantAdapter(lifecycle, settings.qdrant_collection)
 
 
 class SupportAgent:
@@ -1239,8 +219,7 @@ class SupportAgent:
         self.qdrant = qdrant_service
         self.settings = settings
         self.lifecycle = lifecycle
-        self.ai_manager = AIManager(self.settings, self.embedding)
-
+        self.ai_manager = AIManager(self.settings, self.embedding) # Re-instantiate or we could have moved single instance to ai.py
 
 # Single global agent
 support_agent = SupportAgent()
@@ -1282,7 +261,6 @@ async def health():
                         coll = coll_call
                     qdrant_info["points_count"] = getattr(coll, 'points_count', None)
                 except Exception:
-                    # don't fail the entire health check for a single probe
                     pass
             basic_health["components"]["qdrant"] = qdrant_info
         except Exception as e:
@@ -1296,7 +274,6 @@ async def health():
             basic_health["components"]["openai"] = {"status": "error", "error": str(e)}
 
         try:
-            # This project currently does not expose a DB setting; report as not configured
             basic_health["components"]["database"] = {"status": "not_configured"}
         except Exception as e:
             basic_health["components"]["database"] = {"status": "error", "error": str(e)}
@@ -1402,7 +379,8 @@ async def upload_file():
             monitor.end_request(request_id, success=False, error="file field or JSON text required")
             return jsonify({"error": "file field or JSON text required"}), 400
 
-    chunks = await chunk_text_async(text)
+    # Chunk text using service
+    chunks = await embedding_service.chunk_text_async(text)
     doc_id = str(uuid.uuid4())
 
     # Admin auth (if configured)
@@ -1452,6 +430,9 @@ async def upload_file():
     file_type = filename.split('.')[-1].upper() if '.' in filename else 'TXT'
     
     for idx, (c, emb) in enumerate(zip(chunks, embeddings_batch)):
+        if emb is None:
+             # Skip empty embeddings
+             continue
         points.append(qmodels.PointStruct(
             id=str(uuid.uuid4()), 
             vector=emb, 
@@ -1497,19 +478,7 @@ async def upload_file():
         except ValueError as e:
             # Likely a numpy broadcast / dim mismatch error from local Qdrant implementation
             logger.exception('Failed to upsert vectors (likely dim mismatch): %s', e)
-            # Try to read collection vector size for a clearer message
-            coll_dim = None
-            try:
-                coll_info = await asyncio.to_thread(lifecycle.qdrant_client.get_collection, settings.qdrant_collection)
-                if isinstance(coll_info, dict):
-                    vectors = coll_info.get('vectors') or {}
-                    coll_dim = vectors.get('size') if isinstance(vectors, dict) else None
-                else:
-                    vectors = getattr(coll_info, 'vectors', None)
-                    coll_dim = getattr(vectors, 'size', None) if vectors is not None else None
-            except Exception:
-                logger.debug('Could not fetch collection metadata after upsert failure')
-
+            
             detail_msg = str(e)
             if coll_dim is not None:
                 detail_msg = f"Collection vector size is {coll_dim}; attempted upsert vector had incompatible shape. Error: {str(e)}"
@@ -1518,6 +487,7 @@ async def upload_file():
                             "hint": "Recreate or create a collection with EMBEDDING_DIM=3072 using /admin/collection then reindex."}), 409
         except Exception as e:
             raise
+        
         valid_embeds = sum(1 for e in embeddings_batch if e is not None)
         failed = max(0, len(embeddings_batch) - valid_embeds)
         monitor.end_request(request_id, success=True)
@@ -1536,21 +506,10 @@ async def upload_file():
         return jsonify({"error": "Failed to index document", "details": str(e)}), 500
 
 
-
 @app.route('/admin/collection', methods=['POST'])
 @auth_manager.require_admin
 async def admin_manage_collection():
-    """Admin endpoint to recreate or create a Qdrant collection using current EMBEDDING_DIM.
-
-    POST JSON body fields:
-      - mode: 'recreate' (destructive) or 'new' (create new collection) (defaults to 'new')
-      - confirm: true (required for 'recreate')
-      - new_collection_name: (required for mode 'new')
-
-    Example:
-      {"mode": "recreate", "confirm": true}
-      {"mode": "new", "new_collection_name": "my_collection_3072"}
-    """
+    """Admin endpoint to recreate or create a Qdrant collection using current EMBEDDING_DIM."""
     if not lifecycle.qdrant_client:
         return jsonify({"error": "qdrant_unavailable", "details": "No Qdrant client is connected."}), 503
 
@@ -1588,9 +547,7 @@ async def admin_manage_collection():
 @app.route('/admin/reindex_in_memory', methods=['POST'])
 @auth_manager.require_admin
 async def admin_reindex_in_memory():
-    """Upsert all DOCUMENTS currently stored in-memory into the configured collection.
-    This helps re-populate a newly created/recreated collection without re-uploading files.
-    """
+    """Upsert all DOCUMENTS currently stored in-memory into the configured collection."""
     if not lifecycle.qdrant_client:
         return jsonify({"error": "qdrant_unavailable", "details": "No Qdrant client is connected."}), 503
 
@@ -1614,7 +571,6 @@ async def admin_reindex_in_memory():
                     new_embs = await embedding_adapter.embed_texts(texts_to_compute, provider=settings.embedding_provider, context=filename)
                 except Exception as e:
                     logger.exception('Failed to compute embeddings during reindex: %s', e)
-                    # mark all as failed for this document
                     failed += len(texts_to_compute)
                     continue
                 # assign back
@@ -1655,20 +611,10 @@ async def admin_reindex_in_memory():
         return jsonify({"error": "failed", "details": str(e)}), 500 
 
 
-
 @app.route('/admin/upload_vectors', methods=['POST'])
 @auth_manager.require_admin
 async def admin_upload_vectors():
-    """Admin endpoint to upload pre-computed vectors in JSON format.
-
-    Expected JSON format:
-    {
-        "documents": [
-            {"id": "doc1", "filename": "file.pdf", "chunks": [{"text": "...", "vector": [...], "chunk_index": 0}, ...]},
-            ...
-        ]
-    }
-    """
+    """Admin endpoint to upload pre-computed vectors in JSON format."""
     payload = await request.get_json(silent=True)
     if not payload:
         return jsonify({"error": "JSON payload required"}), 400
@@ -1694,7 +640,6 @@ async def admin_upload_vectors():
                 txt = c.get('text','')
                 vec = c.get('vector') or c.get('embed')
                 if not isinstance(vec, list) or len(vec) == 0:
-                    # attempt to compute deterministic embedding if in demo
                     if getattr(settings, 'demo', False):
                         vec = embedding_service.deterministic_embed(txt)
                     else:
@@ -1732,7 +677,6 @@ async def list_documents():
             "type": d.get("type", "FILE")
         } for d in DOCUMENTS])
     
-    # Use QdrantService to list documents
     try:
         docs = await qdrant_service.list_documents()
         return jsonify(docs)
@@ -1747,13 +691,7 @@ async def get_document(doc_id):
         if not doc:
             return jsonify({"error": "document not found"}), 404
         return jsonify({"id": doc["id"], "filename": doc["filename"], "text": doc["text"], "chunks": len(doc["chunks"])})
-    # From Qdrant, get all points with that doc_id? Wait, doc_id is not stored.
-    # Actually, since points have payload with filename, but not doc_id.
-    # In demo, doc_id is generated, but in Qdrant, points have id as uuid, payload filename.
-    # To get full document, perhaps need to store full text in payload or something.
-    # For now, return points for that filename.
-    # But filename may not be unique.
-    # For simplicity, since demo, and Qdrant, perhaps return the chunks.
+    
     chunks = await qdrant_service.get_document_chunks(doc_id)
     if not chunks:
         return jsonify({"error": "document not found"}), 404
@@ -1771,9 +709,11 @@ async def search():
     if not payload or 'query' not in payload:
         monitor.end_request(request_id, success=False, error="query required")
         return jsonify({"error": "query required"}), 400
+    
     query = payload.get('query', '').strip()
     top_k = int(payload.get('top_k', 5))
     simulate_latency = payload.get('simulate_latency', True)
+    filters = payload.get('filters', None) # Extract filters
 
     if not query:
         monitor.end_request(request_id, success=False, error="query is required")
@@ -1782,13 +722,19 @@ async def search():
     if simulate_latency:
         await asyncio.sleep(random.uniform(0.05, 0.4))
 
-    q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}")
-    q_emb = q_embs[0]
-
-    results: List[Dict[str, Any]] = []
-
+    # Use QdrantService for search (which now handles filtering)
+    # The new search_index method does embedding internally too, making this route simpler.
+    # However, for consistency with original logic which handled in-memory search separately,
+    # I should check if I should delegate completely or keep some logic here.
+    # VectorStoreService handles both in-memory and Qdrant in theory if I had moved in-memory logic there fully.
+    # But QdrantService in vector_store.py currently assumes Qdrant is primary and returns empty if unavailable.
+    
+    # If using in-memory only:
     if not lifecycle.qdrant_client:
-        # local in-memory search
+        # manual embedding
+        q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}")
+        q_emb = q_embs[0]
+        results = []
         for d in DOCUMENTS:
             for chunk in d['chunks']:
                 score = sum(x * y for x, y in zip(q_emb, chunk['embed']))
@@ -1798,26 +744,49 @@ async def search():
                     'chunk_text': (chunk['text'][:400] + ('...' if len(chunk['text']) > 400 else '')),
                     'score': float(score),
                 })
+        results.sort(key=lambda r: r['score'], reverse=True)
+        top = results[:top_k]
+        unique_files = set(r['filename'] for r in top)
     else:
-        # Use Qdrant search
-        search_res = await asyncio.to_thread(lifecycle.qdrant_client.query_points, collection_name=settings.qdrant_collection, query=q_emb, limit=top_k)
-        for hit in search_res.points:
-            payload = hit.payload or {}  # type: ignore
-            score = getattr(hit, 'score', None)
-            # Qdrant might return different score field names; normalize
-            s = float(score) if score is not None else 0.0
-            results.append({
-                'doc_id': hit.id,  # type: ignore
-                'filename': payload.get('filename', 'unknown'),
-                'chunk_text': (payload.get('text', '')[:400] + ('...' if len(payload.get('text', '')) > 400 else '')),
-                'score': s,
-            })
+        # Qdrant search with filters (Point 3 compliance)
+        # Use qdrant_service helper to build filters
+        query_filter = qdrant_service.build_filters(filters)
 
-    results.sort(key=lambda r: r['score'], reverse=True)
-    top = results[:top_k]
+        q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}")
+        q_emb = q_embs[0]
+        
+        results = []
+        try:
+            client = lifecycle.qdrant_client
+            if hasattr(client, 'search'):
+                search_res = await asyncio.to_thread(cast(Any, client).search, collection_name=settings.qdrant_collection, query_vector=q_emb, query_filter=query_filter, limit=top_k)
+            else:
+                res = await asyncio.to_thread(client.query_points, collection_name=settings.qdrant_collection, query=q_emb, query_filter=query_filter, limit=top_k)
+                search_res = getattr(res, 'results', res)
+            
+            logger.info(f"DEBUG: search_res type: {type(search_res)}, content: {search_res}")
+            
+            # Handle QueryResponse object from newer Qdrant clients
+            if hasattr(search_res, 'points'):
+                search_res = search_res.points
+            elif isinstance(search_res, tuple):
+                 # If it returned a tuple (e.g. (points, offset)), unpack it
+                 search_res = search_res[0]
 
-    # Calculate sources
-    unique_files = set(r['filename'] for r in top)
+            for hit in search_res:
+                payload = getattr(hit, 'payload', {}) or {}
+                score = getattr(hit, 'score', None) or 0.0
+                results.append({
+                    'doc_id': getattr(hit, 'id'),
+                    'filename': payload.get('filename', 'unknown'),
+                    'chunk_text': (payload.get('text', '')[:400] + ('...' if len(payload.get('text', '')) > 400 else '')),
+                    'score': float(score),
+                })
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            
+        top = results # already limited by Qdrant
+        unique_files = set(r['filename'] for r in top)
 
     answer = None
     # Debug: log AI branch decisions
@@ -1868,9 +837,9 @@ async def search():
 
     monitor.end_request(request_id, success=True)
     return jsonify({
-        "results": top,
+        "results": top, 
         "used_documents": [{"doc_id": r.get("doc_id"), "filename": r.get("filename"), "score": r.get("score"), "chunk_text": r.get("chunk_text")} for r in top],
-        "demo": settings.demo,
+        "demo": settings.demo, 
         "message": DEMO_BANNER if settings.demo else "",
         "answer": answer,
         "sources": list(unique_files) if 'unique_files' in locals() else [],
@@ -1891,15 +860,9 @@ async def optimize_store():
 
     if lifecycle.qdrant_client and not settings.demo:
         try:
-            
-            # Attempt to trigger optimization via the higher-level service
-            logger.info('Triggering Qdrant optimization via QdrantService')
-            try:
-                result = await qdrant_service.optimize_collection()
-                return jsonify(result)
-            except Exception as e:
-                logger.exception('Failed to trigger optimization: %s', e)
-                return jsonify({"error": "optimization failed", "detail": str(e)}), 500
+            # Trigger optimization
+            result = await qdrant_service.optimize_collection()
+            return jsonify(result)
         except Exception:
             logger.exception('Failed to optimize Qdrant collection')
             return jsonify({"error": "optimization failed"}), 500
@@ -1918,25 +881,19 @@ async def reset_store():
             return jsonify({'error': 'unauthorized'}), 401
 
     DOCUMENTS.clear()
-
-    # If a Qdrant client exists and we are not in demo mode, use the service to clear the collection
     if lifecycle.qdrant_client and not settings.demo:
         try:
             result = await qdrant_service.clear_collection()
-            # result expected to be dict like {"success": True, "deleted": N} or {"success": False, "error": "..."}
             if result.get('success'):
-                # include deleted count in response
                 deleted = result.get('deleted', 0)
-                return jsonify({"status": "cleared", "deleted": deleted, "message": f"Cleared {deleted} points."})
+                return jsonify({"status": "cleared", "deleted": deleted})
             else:
-                logger.warning('clear_collection reported failure: %s', result)
-                return jsonify({"error": result.get('error', 'failed to clear collection')}), 500
+                return jsonify({"error": result.get('error', 'failed')}), 500
         except Exception as e:
-            logger.exception('Failed to clear Qdrant collection via service: %s', e)
-            return jsonify({"error": "failed to clear collection", "detail": str(e)}), 500
-
-    # Fallback response (no qdrant or demo mode)
-    return jsonify({"status": "cleared", "message": "All documents cleared (in-memory)."})
+            logger.exception('Failed to clear Qdrant collection')
+            return jsonify({"error": "failed", "details": str(e)}), 500
+            
+    return jsonify({"status": "cleared"})
 
 
 @app.route('/document/<doc_id>', methods=['DELETE'])
@@ -1951,9 +908,17 @@ async def delete_document(doc_id):
             return jsonify({'error': 'unauthorized'}), 401
 
     if not lifecycle.qdrant_client:
-        # Remove from DOCUMENTS
+        # Remove from DOCUMENTS (global fallback)
+        # Note: DOCUMENTS is imported from vector_store now, so modifying it here modifies the shared list
+        # But we need to iterate and remove.
+        # Modifying list in place is safer by index or rebuilding.
+        # Rebuilding:
+        global DOCUMENTS
+        len_before = len(DOCUMENTS)
         DOCUMENTS[:] = [d for d in DOCUMENTS if d["id"] != doc_id]
-        return jsonify({"status": "deleted"})
+        if len(DOCUMENTS) < len_before:
+             return jsonify({"status": "deleted"})
+        return jsonify({"error": "not found in memory"}), 404
 
     # From Qdrant, use QdrantService to delete by filename
     try:
@@ -1961,7 +926,7 @@ async def delete_document(doc_id):
         if deleted_count > 0:
             return jsonify({"status": "deleted", "deleted": deleted_count})
 
-        # If deletion via scanning didn't find anything, try field filters as last resort
+        # If deletion via scanning didn't find anything, try field filters as last resort (direct client call fallback)
         try:
             await asyncio.to_thread(
                 lifecycle.qdrant_client.delete,
@@ -1991,132 +956,8 @@ async def _on_startup():
     # connect qdrant if configured
     await lifecycle.startup()
 
-    # Validate Azure/OpenAI settings and initialize AI client when not in demo mode
-    try:
-        missing = []
-        required = [
-            'azure_openai_api_key',
-            'azure_openai_api_version',
-            'azure_openai_endpoint',
-            'azure_deployment_chat',
-        ]
-        for k in required:
-            if not getattr(settings, k, None):
-                missing.append(k)
-
-        if getattr(settings, 'demo', False):
-            logger.info('Demo mode active - skipping Azure AI client initialization')
-        else:
-            if missing:
-                logger.warning('Azure AI settings incomplete - missing: %s. AI client will not be initialized on startup.', ', '.join(missing))
-            else:
-                try:
-                    # Initialize AI client (will log on success/failure)
-                    support_agent.ai_manager.initialize_client()
-                    logger.info('AI client initialized on startup using Azure settings')
-                except Exception as e:
-                    logger.exception('Failed to initialize AI client on startup: %s', e)
-    except Exception as e:
-        logger.exception('Error during Azure settings validation on startup: %s', e)
-
-    # Start ShutdownManager if available (optional; tolerate different module names)
-    try:
-        _shutdown_started = False
-        for candidate in ("module.ShutdownManager", "Module.ShutdownManager", "ShutdownManager"):
-            try:
-                mod = importlib.import_module(candidate)
-            except Exception:
-                continue
-            ShutdownManagerCls = getattr(mod, "ShutdownManager", None)
-            if not ShutdownManagerCls:
-                continue
-            try:
-                shutdown_manager = ShutdownManagerCls(app, port=getattr(settings, "shutdown_port", 55668), token=getattr(settings, "shutdown_token", None))
-                setattr(app, 'shutdown_manager', shutdown_manager)
-                start_fn = getattr(shutdown_manager, "start_monitoring", None)
-                if inspect.iscoroutinefunction(start_fn):
-                    asyncio.create_task(start_fn())
-                elif callable(start_fn):
-                    try:
-                        # run sync starter in thread to avoid blocking
-                        asyncio.get_running_loop().run_in_executor(None, start_fn)
-                    except Exception:
-                        pass
-                logger.info("ShutdownManager monitoring started via %s", candidate)
-                _shutdown_started = True
-                break
-            except Exception as e:
-                logger.debug("ShutdownManager instantiation/starting failed for %s: %s", candidate, e)
-        if not _shutdown_started:
-            logger.debug("ShutdownManager not found; skipping")
-    except Exception as e:
-        logger.debug("Error while trying to start ShutdownManager: %s", e)
-
-    # Schedule GC periodic cleanup if gc_manager exists and supports periodic_cleanup
-    if 'gc_manager' in globals() and gc_manager is not None and hasattr(gc_manager, 'periodic_cleanup'):
-        async def _gc_loop():
-            while True:
-                try:
-                    if gc_manager:
-                        res = gc_manager.periodic_cleanup()
-                        if inspect.isawaitable(res):
-                            await res
-                        else:
-                            # run sync periodic_cleanup in executor
-                            await asyncio.get_running_loop().run_in_executor(None, gc_manager.periodic_cleanup)
-                except Exception as e:
-                    logger.exception("GC periodic cleanup error: %s", e)
-                interval = getattr(gc_manager, 'gc_interval', 300) or 300
-                await asyncio.sleep(max(5, interval))
-        setattr(app, '_gc_task', asyncio.create_task(_gc_loop()))
-        logger.info("GC periodic background task scheduled")
-    else:
-        logger.debug("gc_manager not available or missing periodic_cleanup; skipping GC background task")
-
 @app.after_serving
 async def _on_shutdown():
-    logger.info("Shutting down background tasks and cleanup managers")
-    # Cancel GC task if present
-    task = getattr(app, '_gc_task', None)
-    if task:
-        task.cancel()
-        try:
-            await task
-        except Exception:
-            pass
-    # Stop ShutdownManager if running (support sync/async stop_monitoring)
-    sm = getattr(app, 'shutdown_manager', None)
-    if sm:
-        try:
-            stop_fn = getattr(sm, 'stop_monitoring', None)
-            if inspect.iscoroutinefunction(stop_fn):
-                await stop_fn()
-            elif callable(stop_fn):
-                await asyncio.get_running_loop().run_in_executor(None, stop_fn)
-        except Exception as e:
-            logger.debug("ShutdownManager stop error: %s", e)
-    # Middleware cleanup (support sync/async cleanup_on_shutdown)
-    cleanup_mw = getattr(app, 'cleanup_middleware', None)
-    if cleanup_mw:
-        try:
-            fn = getattr(cleanup_mw, 'cleanup_on_shutdown', None)
-            if inspect.iscoroutinefunction(fn):
-                await fn()
-            elif callable(fn):
-                await asyncio.get_running_loop().run_in_executor(None, fn)
-        except Exception as e:
-            logger.debug("cleanup_middleware cleanup failed: %s", e)
-    # GC cleanup (support sync/async cleanup_on_shutdown)
-    if 'gc_manager' in globals() and gc_manager is not None and hasattr(gc_manager, 'cleanup_on_shutdown'):
-        try:
-            fn = getattr(gc_manager, 'cleanup_on_shutdown')
-            if inspect.iscoroutinefunction(fn):
-                await fn()
-            elif callable(fn):
-                await asyncio.get_running_loop().run_in_executor(None, fn)
-        except Exception as e:
-            logger.debug("gc_manager cleanup failed: %s", e)
-
     await lifecycle.shutdown()
 
 if __name__ == '__main__':
