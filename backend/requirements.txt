@@ -1,5 +1,7 @@
 quart
+quart-cors
 uvicorn[standard]
+hypercorn
 python-multipart
 aiofiles
 python-dotenv
@@ -11,3 +13,10 @@ sentence-transformers
 fastembed
 pillow
 pytesseract
+openai
+loguru
+psutil
+concurrent-log-handler
+pandas
+scikit-learn
+

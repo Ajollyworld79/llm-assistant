@@ -63,4 +63,7 @@ class Settings:
         self.MEMORY_CACHE_DURATION = int(os.getenv('MEMORY_CACHE_DURATION', '3'))
         self.INACTIVITY_RESET_HOURS = int(os.getenv('INACTIVITY_RESET_HOURS', '2'))
 
+        # Logging control: when false, logs will only be emitted to stderr/console
+        self.LOG_TO_FILE = os.getenv('LOG_TO_FILE', 'false').lower() in ('1', 'true', 'yes')
+
 settings = Settings()

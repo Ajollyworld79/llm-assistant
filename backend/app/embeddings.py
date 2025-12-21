@@ -25,7 +25,14 @@ _FE_PROCESS_POOL: ProcessPoolExecutor | None = None
 # Per-process local model instance inside worker processes (set lazily)
 _FE_PROCESS_LOCAL_MODEL = None
 
-log = logging.getLogger(__name__)
+# Setup logging
+try:
+    from .module.Functions_module import setup_logger
+    logger = setup_logger()
+except ImportError:
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+    logger = logging.getLogger(__name__)
 
 try:
     from .config import settings
@@ -82,10 +89,10 @@ async def preload_embedding_models():
                 try:
                     await _run_blocking(warm_up)
                 except Exception:
-                    log.warning('SentenceTransformer warm-up had an error')
-            log.info('Preloaded and warmed up SentenceTransformer model')
+                    logger.warning('SentenceTransformer warm-up had an error')
+            logger.info('Preloaded and warmed up SentenceTransformer model')
         except Exception as e:
-            log.warning('Failed to preload SentenceTransformer: %s', e)
+            logger.warning('Failed to preload SentenceTransformer: %s', e)
 
     # Only preload FastEmbed if SentenceTransformer is NOT loaded, or if specifically requested
     # Check if we successfully loaded ST above
@@ -113,11 +120,11 @@ async def preload_embedding_models():
                     list(_CLASS_FE.embed(["test"]))  # type: ignore
                 try:
                     await asyncio.wait_for(_run_blocking(warm_up), timeout=max(1, settings.embedding_timeout // 2))
-                    log.info('Preloaded and warmed up FastEmbed model')
+                    logger.info('Preloaded and warmed up FastEmbed model')
                 except asyncio.TimeoutError:
-                    log.warning('FastEmbed warm-up timed out')
+                    logger.warning('FastEmbed warm-up timed out')
         except Exception as e:
-            log.warning('Failed to preload FastEmbed: %s', e)
+            logger.warning('Failed to preload FastEmbed: %s', e)
 
 async def _run_blocking(fn, *args, **kwargs):
     loop = asyncio.get_running_loop()
@@ -264,7 +271,7 @@ async def embed_texts_fastembed(texts: List[str]) -> List[List[float]]:
                 # thread and to reduce resource leakage when timeouts occur.
                 vecs = await asyncio.wait_for(_run_in_fe_process(batch), timeout=settings.embedding_timeout)
             except asyncio.TimeoutError:
-                log.warning('FastEmbed batch embed timed out after %s seconds', settings.embedding_timeout)
+                logger.warning('FastEmbed batch embed timed out after %s seconds', settings.embedding_timeout)
                 raise RuntimeError('FastEmbed embedding timed out')
             if vecs:
                 all_vecs.extend(vecs)
@@ -272,7 +279,7 @@ async def embed_texts_fastembed(texts: List[str]) -> List[List[float]]:
                 raise RuntimeError('FastEmbed returned empty embeddings for batch')
         return all_vecs
     except Exception as e:
-        log.debug('FastEmbed embedding failed: %s', e)
+        logger.debug('FastEmbed embedding failed: %s', e)
         raise RuntimeError('FastEmbed embedding failed') from e
 
 
@@ -305,7 +312,7 @@ async def _monitor_slow(task: asyncio.Task, provider: str, context: str | None, 
     try:
         await asyncio.sleep(delay)
         if not task.done():
-            log.warning("Embedding task running > %s seconds (provider=%s, context=%s)", delay, provider, context or "<no-context>")
+            logger.warning("Embedding task running > %s seconds (provider=%s, context=%s)", delay, provider, context or "<no-context>")
     except asyncio.CancelledError:
         return
 
@@ -315,7 +322,7 @@ async def embed_texts(texts: List[str], provider: str = 'sentence', context: str
     which will be included in slow-task logs to help debugging."""
     p = (provider or settings.embedding_provider or '').strip().lower()
     # log start with context to make requests visible
-    log.info('Starting embed_texts provider=%s count=%d context=%s', p, len(texts), context or '<none>')
+    logger.info('Starting embed_texts provider=%s count=%d context=%s', p, len(texts), context or '<none>')
 
     # Create a placeholder task variable for monitoring; we'll schedule the actual
     # work as a subtask so we can monitor it for slow execution.
@@ -337,7 +344,7 @@ async def embed_texts(texts: List[str], provider: str = 'sentence', context: str
         try:
             return await _run_and_monitor(embed_texts_azure(texts))
         except Exception as e:
-            log.exception('Azure embedding failed: %s', e)
+            logger.exception('Azure embedding failed: %s', e)
             raise e
 
     # Explicit FastEmbed selection
@@ -345,39 +352,39 @@ async def embed_texts(texts: List[str], provider: str = 'sentence', context: str
         if not HAS_FASTEMBED:
             raise RuntimeError('FastEmbed requested but not available')
         try:
-            log.info('Attempting FastEmbed for embeddings')
+            logger.info('Attempting FastEmbed for embeddings')
             return await _run_and_monitor(embed_texts_fastembed(texts))
         except Exception as e:
-            log.exception('FastEmbed failed when explicitly requested: %s', e)
+            logger.exception('FastEmbed failed when explicitly requested: %s', e)
             raise e
 
     # SentenceTransformers preferred (default) with fallback
     if p in ('sentence', 'sentence-transformers', 'sentence_transformers', 'st') or p == '':
         if HAS_SENTENCE:
             try:
-                log.info('Using SentenceTransformers for embeddings')
+                logger.info('Using SentenceTransformers for embeddings')
                 return await _run_and_monitor(embed_texts_sentencetransformers(texts))
             except Exception as e:
-                log.exception('SentenceTransformers failed, will try FastEmbed as fallback: %s', e)
+                logger.exception('SentenceTransformers failed, will try FastEmbed as fallback: %s', e)
         # fallback to FastEmbed if available
         if HAS_FASTEMBED:
             try:
-                log.info('Falling back to FastEmbed for embeddings')
+                logger.info('Falling back to FastEmbed for embeddings')
                 return await _run_and_monitor(embed_texts_fastembed(texts))
             except Exception as e:
-                log.exception('FastEmbed fallback failed: %s', e)
+                logger.exception('FastEmbed fallback failed: %s', e)
 
     # If both model types are unavailable or failed, try alternate fastembed call (best-effort)
     if HAS_FASTEMBED:
         try:
-            log.info('Trying alternate fastembed API call')
+            logger.info('Trying alternate fastembed API call')
             model = TextEmbedding()
             return await _run_and_monitor(_run_blocking(model.embed, texts))
         except Exception:
-            log.warning('FastEmbed call failed')
+            logger.warning('FastEmbed call failed')
 
     # fallback: deterministic simple embeddings
-    log.warning('No embedding backend available; using deterministic fallback')
+    logger.warning('No embedding backend available; using deterministic fallback')
     from hashlib import md5
     import math
 

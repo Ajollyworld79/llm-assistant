@@ -26,7 +26,14 @@ try:
 except Exception:
     gc_manager = None
 
-log = logging.getLogger(__name__)
+# Setup logging
+try:
+    from .Functions_module import setup_logger
+    logger = setup_logger()
+except ImportError:
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+    logger = logging.getLogger(__name__)
 
 
 class EnhancedCleanupMiddleware:
@@ -76,7 +83,7 @@ class EnhancedCleanupMiddleware:
         self.gc_threshold_requests = 100
         self.requests_since_gc = 0
 
-        log.info("EnhancedCleanupMiddleware initialized")
+        logger.info("EnhancedCleanupMiddleware initialized")
 
     async def __call__(self, scope, receive, send):
         # Only handle http requests
@@ -89,7 +96,7 @@ class EnhancedCleanupMiddleware:
 
         # Pre-request tracking
         if len(self.active_connections) >= self.max_tracked_connections:
-            log.warning("Max tracked connections reached, triggering cleanup")
+            logger.warning("Max tracked connections reached, triggering cleanup")
             await self._cleanup_resources()
 
         self.active_connections.add(conn_id)
@@ -105,13 +112,13 @@ class EnhancedCleanupMiddleware:
 
             # Emergency if memory crosses emergency fraction of critical threshold
             if mem > (self.memory_critical_threshold_mb * self.gc_emergency_threshold):
-                log.warning(f"EMERGENCY memory usage: {mem:.1f} MB (threshold {self.gc_emergency_threshold * self.memory_critical_threshold_mb:.1f} MB)")
+                logger.warning(f"EMERGENCY memory usage: {mem:.1f} MB (threshold {self.gc_emergency_threshold * self.memory_critical_threshold_mb:.1f} MB)")
                 await self._emergency_cleanup()
             elif mem > self.memory_critical_threshold_mb:
-                log.warning(f"CRITICAL memory usage: {mem:.1f} MB")
+                logger.warning(f"CRITICAL memory usage: {mem:.1f} MB")
                 await self._emergency_cleanup()
             elif mem > self.memory_warning_threshold_mb:
-                log.warning(f"High memory usage: {mem:.1f} MB")
+                logger.warning(f"High memory usage: {mem:.1f} MB")
 
             if self._should_run_cleanup():
                 await self._cleanup_resources()
@@ -133,7 +140,7 @@ class EnhancedCleanupMiddleware:
 
         except Exception as e:
             self.health_stats["failed_requests"] += 1
-            log.exception(f"Middleware error for connection {conn_id}: {e}")
+            logger.exception(f"Middleware error for connection {conn_id}: {e}")
             raise
         finally:
             self.active_connections.discard(conn_id)
@@ -160,7 +167,7 @@ class EnhancedCleanupMiddleware:
             self.last_memory_check = now
             return mem
         except Exception as e:
-            log.debug(f"_get_memory_usage_mb failed: {e}")
+            logger.debug(f"_get_memory_usage_mb failed: {e}")
             return self.cached_memory_mb
 
     def _should_run_cleanup(self) -> bool:
@@ -188,26 +195,26 @@ class EnhancedCleanupMiddleware:
             self.health_stats["uptime_seconds"] = int(time.monotonic() - self.start_time)
 
             duration = time.monotonic() - start
-            log.info(f"Periodic resource cleanup completed in {duration:.3f}s")
+            logger.info(f"Periodic resource cleanup completed in {duration:.3f}s")
         except Exception as e:
-            log.exception(f"_cleanup_resources failed: {e}")
+            logger.exception(f"_cleanup_resources failed: {e}")
 
     async def _emergency_cleanup(self) -> None:
         try:
-            log.warning("Running emergency cleanup")
+            logger.warning("Running emergency cleanup")
             # Aggressive GC - number of quick samples bounded by config
             sample_count = min(3, getattr(self, 'gc_max_memory_samples', 3))
             for _ in range(sample_count):
                 c = await asyncio.to_thread(gc.collect)
                 if c > 0:
-                    log.info(f"Emergency GC collected {c} objects")
+                    logger.info(f"Emergency GC collected {c} objects")
 
             # Clear tracked connections
             old = len(self.active_connections)
             self.active_connections.clear()
             self.connection_timestamps.clear()
             if old > 0:
-                log.warning(f"Emergency: cleared {old} tracked connections")
+                logger.warning(f"Emergency: cleared {old} tracked connections")
 
             # Use centralized gc_manager emergency if available
             if gc_manager is not None:
@@ -216,16 +223,16 @@ class EnhancedCleanupMiddleware:
             # Update memory sample after cleanup
             await self._get_memory_usage_mb()
         except Exception as e:
-            log.exception(f"_emergency_cleanup failed: {e}")
+            logger.exception(f"_emergency_cleanup failed: {e}")
 
     async def _run_garbage_collection(self) -> None:
         try:
             collected = await asyncio.to_thread(gc.collect)
             self.requests_since_gc = 0
             if collected > 0:
-                log.debug(f"Middleware GC: collected {collected} objects")
+                logger.debug(f"Middleware GC: collected {collected} objects")
         except Exception as e:
-            log.warning(f"_run_garbage_collection error: {e}")
+            logger.warning(f"_run_garbage_collection error: {e}")
 
     async def get_health_metrics(self) -> Dict[str, Any]:
         mem = await self._get_memory_usage_mb()
@@ -248,14 +255,14 @@ class EnhancedCleanupMiddleware:
 
     async def cleanup_on_shutdown(self) -> None:
         try:
-            log.info("Middleware shutdown cleanup starting")
+            logger.info("Middleware shutdown cleanup starting")
             await self._cleanup_resources()
             self.active_connections.clear()
             self.connection_timestamps.clear()
             collected = gc.collect()
-            log.info(f"Middleware shutdown cleanup completed ({collected} objects collected)")
+            logger.info(f"Middleware shutdown cleanup completed ({collected} objects collected)")
         except Exception as e:
-            log.exception(f"cleanup_on_shutdown failed: {e}")
+            logger.exception(f"cleanup_on_shutdown failed: {e}")
 
 
 def setup_middleware(app):
@@ -276,7 +283,7 @@ def setup_middleware(app):
             status_code = response.status_code
 
             # Log basic info
-            log.info(f"{request.method} {request.path} {status_code} - {duration_ms:.2f}ms")
+            logger.info(f"{request.method} {request.path} {status_code} - {duration_ms:.2f}ms")
 
             # Record metrics
             is_success = 200 <= status_code < 400
@@ -291,8 +298,8 @@ def setup_middleware(app):
             return e
 
         # Log unexpected errors
-        log.error(f"Unhandled exception: {str(e)}")
-        log.debug(traceback.format_exc())
+        logger.error(f"Unhandled exception: {str(e)}")
+        logger.debug(traceback.format_exc())
 
         return jsonify({
             "error": "Internal Server Error",
@@ -330,6 +337,6 @@ def setup_middleware(app):
             cleanup.gc_max_memory_samples = getattr(settings, 'GC_MAX_MEMORY_SAMPLES', cleanup.gc_max_memory_samples)
         app.asgi_app = cleanup
         app.cleanup_middleware = cleanup
-        log.info("EnhancedCleanupMiddleware registered and ASGI app wrapped")
+        logger.info("EnhancedCleanupMiddleware registered and ASGI app wrapped")
     except Exception as e:
-        log.warning(f"EnhancedCleanupMiddleware not available: {e}")
+        logger.warning(f"EnhancedCleanupMiddleware not available: {e}")

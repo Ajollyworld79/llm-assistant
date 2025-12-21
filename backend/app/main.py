@@ -20,6 +20,7 @@ import csv
 import time
 import asyncio
 import inspect
+import importlib
 import random
 import hashlib
 import math
@@ -28,6 +29,7 @@ import datetime
 import gc
 import pandas as pd                
 import tempfile
+from functools import wraps
 from pypdf import PdfReader
 
 
@@ -55,9 +57,14 @@ except ImportError:
     except Exception:
         gc_manager = None
 
-# Basic logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
-log = logging.getLogger(__name__)
+# Setup logging
+try:
+    from .module.Functions_module import setup_logger
+    logger = setup_logger()
+except ImportError:
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+    logger = logging.getLogger(__name__)
 
 from typing import TYPE_CHECKING
 
@@ -72,7 +79,13 @@ except ImportError:
 
 
 class AIManager:
-    """Wrapper around Azure OpenAI chat use and response parsing."""
+    """Central AI manager for chat completions and parsing.
+
+    Provides:
+    - English system prompt tailored for a public portfolio demo
+    - Robust [SOURCE:X] parsing on the first line
+    - Graceful handling of content filter blocks
+    """
 
     def __init__(self, settings, embeddings_module, client=None):
         self.settings = settings
@@ -83,42 +96,52 @@ class AIManager:
         """Lazily initialize AsyncAzureOpenAI client if available."""
         if self._client is None:
             if AsyncAzureOpenAI is None:
-                log.warning("AsyncAzureOpenAI is not available; AI calls will be disabled")
+                logger.warning("AsyncAzureOpenAI is not available; AI calls will be disabled")
                 return
             try:
-
                 self._client = AsyncAzureOpenAI(
                     api_key=cast(str, getattr(self.settings, "azure_openai_api_key", "")),
                     api_version=cast(str, getattr(self.settings, "azure_openai_api_version", "")),
                     azure_endpoint=cast(str, getattr(self.settings, "azure_openai_endpoint", "")),
                 )
-                log.info("AIManager: AsyncAzureOpenAI client initialized")
+                logger.info("AIManager: AsyncAzureOpenAI client initialized")
             except Exception as e:
-                log.exception("AIManager: failed to initialize client: %s", e)
+                logger.exception("AIManager: failed to initialize client: %s", e)
                 self._client = None
 
     async def ask_agent_with_context(self, query: str, context: str, conversation_history: Optional[list] = None) -> Tuple[str, Optional[int]]:
-        """Send the query + context + history to the chat model.
+        """Send query + context + (optional) history to the chat model.
 
-        Returns (cleaned_text, source_indicator) where source_indicator is 0,1 or None.
+        Returns cleaned_text and source_indicator (0,1 or None). In demo mode, uses DemoLLM.
         """
         if conversation_history is None:
             conversation_history = []
+
+        # Demo mode short-circuit
+        if getattr(self.settings, 'demo', False):
+            demo = DemoLLM()
+            try:
+                raw, src = await demo.generate(query, context)
+                cleaned, src2 = self._parse_and_clean_source(raw)
+                return cleaned, src2
+            except Exception as e:
+                logger.exception('DemoLLM failed: %s', e)
+                return ("(Demo) Sorry, demo generation failed.", None)
 
         # Ensure client
         if self._client is None:
             self.initialize_client()
         if self._client is None:
-            return ("Beklager, noget gik galt med assistenten.", None)
+            return ("Sorry, the assistant is currently unavailable.", None)
 
         # Build system prompt and messages
-        max_ctx = getattr(self.settings, "MAX_CONTEXT_CHARS", 4000)
+        max_ctx = int(getattr(self.settings, "MAX_CONTEXT_CHARS", 4000))
         ctx = (context[:max_ctx] + "\n\n...[Truncated context]...") if context and len(context) > max_ctx else (context or "")
 
         system_prompt = self._build_system_prompt(ctx)
         messages = [{"role": "system", "content": system_prompt}]
 
-        # Conversation history (safe)
+        # Conversation history
         max_history = int(getattr(self.settings, "MAX_CONVERSATION_HISTORY", 6))
         history_limit = min(len(conversation_history), max_history)
         for msg in (conversation_history or [])[-history_limit:]:
@@ -133,16 +156,14 @@ class AIManager:
         messages.append({"role": "user", "content": query})
 
         try:
-            # Ensure model is a proper string per type expectations
             model = cast(str, getattr(self.settings, "azure_deployment_chat", ""))
             if not model:
-                log.warning("AIManager: no chat model configured; aborting request")
-                return ("Beklager, noget gik galt med assistenten.", None)
+                logger.warning("AIManager: no chat model configured; aborting request")
+                return ("Sorry, the assistant is not configured.", None)
 
             temperature = float(getattr(self.settings, "TEMPERATURE", 0.3))
             max_tokens = int(getattr(self.settings, "MAX_TOKENS", 512))
 
-            # Cast messages to Any to satisfy typing for third-party API wrappers
             completion = await self._client.chat.completions.create(
                 model=model,
                 messages=cast(Any, messages),
@@ -162,27 +183,40 @@ class AIManager:
             txt = str(e).lower()
             if "content_filter" in txt or "responsibleaipolicyviolation" in txt or (hasattr(e, "status_code") and getattr(e, "status_code", None) == 400):
                 return "__CONTENT_FILTER_BLOCKED__", None
-            log.exception("AIManager: ask_agent_with_context failed: %s", e)
-            return ("Beklager, noget gik galt med assistenten.", None)
+            logger.exception("AIManager: ask_agent_with_context failed: %s", e)
+            return ("Sorry, something went wrong with the assistant.", None)
 
     def _parse_and_clean_source(self, response_text: str) -> Tuple[str, Optional[int]]:
-        """Robust parsing of a [SOURCE:X] marker on the FIRST line only."""
+        """Parse a leading [SOURCE:X] marker (only when it occurs on the FIRST non-empty line).
+
+        Returns (cleaned_text, source_index) where source_index is 0,1 or None.
+        """
         if not response_text:
             return response_text, None
 
-        m = re.match(r'^\s*\**\s*\[SOURCE:(?P<s>[01])\]\s*\**\s*(?:\n)?\s*(?P<rest>.*)', response_text, flags=re.S)
-        if m:
-            rest = m.group("rest") or ""
-            return rest.strip(), int(m.group("s"))
-        return response_text, None
+        # Only consider a SOURCE marker on the first non-empty line
+        lines = response_text.splitlines()
+        for i, line in enumerate(lines):
+            if line.strip() == '':
+                continue
+            m = re.match(r'^\s*\**\s*\[SOURCE:(?P<s>[01])\]\s*\**\s*(?P<rest>.*)', line, flags=re.S)
+            if m:
+                rest = m.group('rest') or ''
+                # Rebuild remaining lines after the first line
+                remaining = '\n'.join([rest] + lines[i+1:])
+                return remaining.strip(), int(m.group('s'))
+            break
+        return response_text.strip(), None
 
     def _build_system_prompt(self, context: str) -> str:
+        """English system prompt for the public demo assistant."""
         base = (
-            "You are a helpful, concise, and safety-conscious assistant. "
-            "Answer clearly in English and use Markdown formatting when it improves readability. "
-            "Be factual, admit uncertainty when appropriate, and do not fabricate information or external links.\n\n"
+            "You are a concise, factual, and safety-aware assistant for a public demo. "
+            "Answer clearly in English and use Markdown when helpful. Do not invent links or confidential info.\n\n"
         )
         base += "CONTEXT: " + (context if context else "[None]")
+        base += "\n\nIf the answer comes from provided documents, PREFIX the response on the first line with [SOURCE:0]. "
+        base += "If it comes from general knowledge, PREFIX the response on the first line with [SOURCE:1].\n"
         return base
 
 
@@ -238,6 +272,19 @@ def _clean_text(t: str) -> str:
 
 DEMO_BANNER = "Demo mode — results are simulated; no active LLM connection."
 EMBED_DIM = settings.embedding_dim
+
+# Friendly user-facing responses used by validation and safety checks
+NON_IT_RESPONSE = (
+    "That question doesn't appear related to IT or work tasks (recipes, sports, travel, etc.). "
+    "I can help with IT topics such as Microsoft 365, Windows, networking, printers, and related business questions. "
+    "Please rephrase your question with an IT focus so I can assist."
+)
+
+CONTENT_FILTER_RESPONSE = (
+    "The assistant could not comply with the request due to content policy restrictions. "
+    "If you believe this is an error, please rephrase the request or contact support."
+)
+
 
 
 def get_welcome_prompt() -> str:
@@ -346,7 +393,7 @@ class ParserService:
     """
 
     def __init__(self):
-        self.logger = log
+        self.logger = logger
 
     def parse_content(self, filename: str, content: bytes) -> str:
 
@@ -611,7 +658,7 @@ class ParserService:
                         return f"Internet shortcut: {filename}"
 
                 except Exception as e:
-                    log.exception('Error parsing URL file: %s', e)
+                    logger.exception('Error parsing URL file: %s', e)
                     return f"URL shortcut: {filename}"
 
             # Fallback
@@ -619,7 +666,7 @@ class ParserService:
                 return f"[Simulated parsing for {filename} - demo mode]\nContent not extracted."
 
         except Exception as e:
-            log.exception('Error parsing content: %s', e)
+            logger.exception('Error parsing content: %s', e)
             return f"[Error parsing {filename}, using fallback text.]"
 
 # Create a single global parser instance for convenience
@@ -630,6 +677,214 @@ async def parse_content(filename: str, content: bytes) -> str:
     Runs the blocking parser in a separate thread to avoid blocking the event loop.
     """
     return await asyncio.to_thread(parser_service.parse_content, filename, content)
+
+
+# ------------------------- New helper classes (portfolio demo) -------------------------
+class DomainClassifier:
+    """Lightweight domain classifier for demo: IT vs non-IT vs math."""
+
+    def __init__(self) -> None:
+        self.non_it_keywords = set([
+            'recipe', 'recipes', 'food', 'cooking', 'travel', 'movie', 'music', 'book', 'books', 'sport', 'sports',
+        ])
+        self.it_keywords = set([
+            'windows', 'excel', 'outlook', 'teams', 'sharepoint', 'onedrive', 'word', 'powerpoint', 'vpn', 'printer', 'network', 'wifi', 'email', 'password', 'printer', 'linux', 'azure', 'microsoft'
+        ])
+
+    def is_math_query(self, text: str) -> bool:
+        if not text:
+            return False
+        clean_text = text.replace(' ', '').strip()
+        math_pattern = re.compile(r"^[\d\+\-\*\/\(\)\=\.\,\s]*[\+\-\*\/][\d\+\-\*\/\(\)\=\.\,\s]*$")
+        if math_pattern.match(clean_text):
+            return True
+        math_keywords = ['plus', 'minus', 'times', 'divide', 'percentage', '%']
+        text_lower = text.lower()
+        has_math_word = any(word in text_lower for word in math_keywords)
+        has_numbers = any(char.isdigit() for char in text)
+        return has_math_word and has_numbers
+
+    def classify_query_domain(self, text: str) -> dict:
+        if not text or not text.strip():
+            return {'domain': 'unknown', 'is_it': False}
+        if self.is_math_query(text):
+            return {'domain': 'math', 'is_it': False}
+        q = text.lower()
+        for k in self.non_it_keywords:
+            if k in q:
+                return {'domain': 'non_it', 'is_it': False}
+        for k in self.it_keywords:
+            if k in q:
+                return {'domain': 'it', 'is_it': True}
+        return {'domain': 'unknown', 'is_it': True}
+
+
+class ValidationManager:
+    """Validate user input and provide friendly messages."""
+
+    def __init__(self, domain_classifier: DomainClassifier) -> None:
+        self.domain_classifier = domain_classifier
+
+    def validate_user_query(self, query: str, max_chars: int = 2000) -> tuple[bool, Optional[str]]:
+        if not query or not query.strip():
+            return False, "Please provide a non-empty query."
+        if len(query) > max_chars:
+            return False, "The query is too long; please shorten it."
+        classification = self.domain_classifier.classify_query_domain(query)
+        if classification.get('domain') == 'non_it':
+            return False, NON_IT_RESPONSE
+        return True, None
+
+
+class AuthManager:
+    """Simple decorator for admin endpoints using a Bearer token defined in settings."""
+
+    def __init__(self, settings) -> None:
+        self.settings = settings
+
+    def require_admin(self, f):
+        @wraps(f)
+        async def decorated_function(*args, **kwargs):
+            token_expected = getattr(self.settings, 'admin_token', None)
+            if not token_expected:
+                return jsonify({'error': 'unauthorized', 'detail': 'Admin token not configured'}), 401
+            auth = request.headers.get('Authorization', '')
+            if not auth.startswith('Bearer '):
+                return jsonify({'error': 'unauthorized'}), 401
+            token = auth.split(' ', 1)[1].strip()
+            if token != token_expected:
+                return jsonify({'error': 'unauthorized'}), 401
+            return await f(*args, **kwargs)
+
+        return decorated_function
+
+
+class EmbeddingAdapter:
+    """Adapter to produce embeddings: deterministic demo or call project's `embeddings` module."""
+
+    def __init__(self, settings, embedding_service):
+        self.settings = settings
+        self.embedding_service = embedding_service
+
+    async def embed_texts(self, texts: list[str], provider: Optional[str] = None, context: Optional[str] = None) -> list[list[float]]:
+        # Demo mode: deterministic embedding
+        if getattr(self.settings, 'demo', False):
+            # run deterministic embedding synchronously but in thread to avoid blocking
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, lambda: [self.embedding_service.deterministic_embed(t) for t in texts])
+
+        try:
+            # Prefer project's embeddings.embed_texts if available
+            prov = provider if provider is not None else getattr(self.settings, 'embedding_provider', "")
+            # Ensure we pass a string (avoid passing None which some implementations may not accept)
+            prov = str(prov) if prov is not None else ""
+            return await embeddings.embed_texts(texts, provider=prov, context=context)
+        except Exception as e:
+            logger.warning('EmbeddingAdapter falling back to deterministic due to: %s', e)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, lambda: [self.embedding_service.deterministic_embed(t) for t in texts])
+
+
+class QdrantAdapter:
+    """Thin adapter to upsert/delete/list vectors in Qdrant or use in-memory fallback."""
+
+    def __init__(self, lifecycle_obj, collection_name: str):
+        self.lifecycle = lifecycle_obj
+        self.collection = collection_name
+
+    def is_available(self) -> bool:
+        return bool(getattr(self.lifecycle, 'qdrant_client', None))
+
+    async def upsert_document_vectors(self, doc_id: str, filename: str, chunks: list[dict]):
+        """Chunks: list of {'text': str, 'vector': list[float], 'chunk_index': int}
+        Returns number of upserted points or raises.
+        """
+        client = getattr(self.lifecycle, 'qdrant_client', None)
+        if not client:
+            # fallback: store in in-memory DOCUMENTS
+            existing = next((d for d in DOCUMENTS if d['id'] == doc_id), None)
+            if existing:
+                existing['chunks'] = [{'text': c['text'], 'embed': c['vector']} for c in chunks]
+                return len(chunks)
+            DOCUMENTS.append({
+                'id': doc_id,
+                'filename': filename,
+                'text': ' '.join([c.get('text','') for c in chunks]),
+                'chunks': [{'text': c['text'], 'embed': c['vector']} for c in chunks],
+                'uploaded_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'type': filename.split('.')[-1].upper() if '.' in filename else 'FILE'
+            })
+            return len(chunks)
+
+        # Prepare points using qmodels if available
+        points = []
+        skipped = 0
+        try:
+            for c in chunks:
+                vec = c.get('vector') or c.get('embed')
+                txt = c.get('text','')
+
+                # If vector is missing, attempt deterministic embed as a best-effort fallback
+                if vec is None:
+                    try:
+                        vec = embedding_service.deterministic_embed(txt)
+                        logger.debug('QdrantAdapter: computed deterministic embedding for missing vector (filename=%s)', filename)
+                    except Exception:
+                        logger.warning('QdrantAdapter: missing vector and deterministic embed failed; skipping chunk (filename=%s)', filename)
+                        skipped += 1
+                        continue
+
+                # Ensure vector is a plain Python list of floats
+                try:
+                    if not isinstance(vec, list):
+                        vec = list(vec)
+                except Exception:
+                    try:
+                        vec = [float(v) for v in vec]
+                    except Exception:
+                        logger.warning('QdrantAdapter: vector not iterable/convertible; skipping chunk (filename=%s)', filename)
+                        skipped += 1
+                        continue
+
+                idx = c.get('chunk_index', 0)
+                payload = {
+                    'filename': filename,
+                    'chunk_index': idx,
+                    'text': txt,
+                    'uploaded_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                    'type': filename.split('.')[-1].upper() if '.' in filename else 'FILE'
+                }
+
+                if 'qmodels' in globals():
+                    try:
+                        points.append(qmodels.PointStruct(id=str(uuid.uuid4()), vector=vec, payload=payload))
+                    except Exception as e:
+                        logger.warning('qmodels.PointStruct construction failed, falling back to dict point: %s', e)
+                        points.append({'id': str(uuid.uuid4()), 'vector': vec, 'payload': payload})
+                else:
+                    # fallback: point as dict
+                    points.append({'id': str(uuid.uuid4()), 'vector': vec, 'payload': payload})
+
+            if not points:
+                logger.warning('QdrantAdapter: no valid points to upsert (all chunks skipped) for filename=%s', filename)
+                return 0
+
+            # Upsert using client in a thread
+            await asyncio.to_thread(client.upsert, collection_name=self.collection, points=points)
+            return len(points)
+        except Exception as e:
+            logger.exception('Failed to upsert vectors: %s', e)
+            raise
+
+
+# Instantiate helpers for use in endpoints
+domain_classifier = DomainClassifier()
+validation_manager = ValidationManager(domain_classifier)
+auth_manager = AuthManager(settings)
+embedding_adapter = EmbeddingAdapter(settings, embedding_service)
+qdrant_adapter = QdrantAdapter(lifecycle, settings.qdrant_collection)
+
+# ------------------------- End helper classes -------------------------
 
 
 class QdrantService:
@@ -728,31 +983,31 @@ class QdrantService:
             # Note: we prefer file-backed path for local persistence when possible
             try:
                 self.lifecycle.qdrant_client = _QdrantClient(path=qdrant_path)
-                log.info(f"Qdrant client initialized at {qdrant_path}")
+                logger.info(f"Qdrant client initialized at {qdrant_path}")
             except Exception as e:
-                log.warning(f"Could not initialize local Qdrant client: {e}")
+                logger.warning(f"Could not initialize local Qdrant client: {e}")
         except Exception as e:
-            log.error(f"Qdrant initialize_client error: {e}")
+            logger.error(f"Qdrant initialize_client error: {e}")
 
     async def setup_collection(self) -> bool:
         """Ensure the collection exists and mark it as ready. Returns True if ready."""
         try:
             client = getattr(self.lifecycle, 'qdrant_client', None)
             if client is None:
-                log.warning("Qdrant client not available - cannot setup collection")
+                logger.warning("Qdrant client not available - cannot setup collection")
                 return False
 
             try:
                 collection_info = await asyncio.to_thread(client.get_collection, self.collection)
-                log.info(f"Qdrant collection '{self.collection}' ready: {collection_info.points_count} points")
+                logger.info(f"Qdrant collection '{self.collection}' ready: {collection_info.points_count} points")
                 self.collection_ready = True
                 return True
             except Exception as e:
-                log.info(f"Qdrant collection '{self.collection}' not present or unusable: {e}")
+                logger.info(f"Qdrant collection '{self.collection}' not present or unusable: {e}")
                 self.collection_ready = False
                 return False
         except Exception as e:
-            log.error(f"setup_collection error: {e}")
+            logger.error(f"setup_collection error: {e}")
             return False
 
     def preprocess_query(self, query_text: str) -> str:
@@ -797,14 +1052,14 @@ class QdrantService:
             processed_query = self.preprocess_query(query_text)
 
             # Generate embedding (use project's embeddings helper if available)
-            emb_list = await embeddings.embed_texts([processed_query], provider=settings.embedding_provider, context=f"search:{processed_query[:80]}")
+            emb_list = await embedding_adapter.embed_texts([processed_query], provider=settings.embedding_provider, context=f"search:{processed_query[:80]}")
             if not emb_list:
                 return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
             vector = emb_list[0]
 
             client = getattr(self.lifecycle, 'qdrant_client', None)
             if client is None:
-                log.error("Qdrant client not available - cannot search")
+                logger.error("Qdrant client not available - cannot search")
                 return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
 
             # Retry with exponential backoff
@@ -825,10 +1080,10 @@ class QdrantService:
                 except Exception as e:
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt)
-                        log.warning(f"Qdrant search attempt {attempt+1} failed: {e}. Retrying in {delay}s")
+                        logger.warning(f"Qdrant search attempt {attempt+1} failed: {e}. Retrying in {delay}s")
                         await asyncio.sleep(delay)
                     else:
-                        log.error(f"Qdrant search failed after {max_retries} attempts: {e}")
+                        logger.error(f"Qdrant search failed after {max_retries} attempts: {e}")
                         return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
 
             # Format results into context and sources
@@ -868,7 +1123,7 @@ class QdrantService:
 
             return {"context": "\n\n".join(chunks), "sources": source_docs, "embedding_time": 0.0, "search_time": 0.0}
         except Exception as e:
-            log.error(f"search_index error: {e}")
+            logger.error(f"search_index error: {e}")
             return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
 
     def set_loading_state(self, is_loading: bool, operation: str = "", total_docs: int = 0) -> None:
@@ -950,7 +1205,7 @@ class QdrantService:
             return {"success": True, "deleted": total_deleted}
         except Exception as e:
             self.set_loading_state(False)
-            log.error(f"clear_collection error: {e}")
+            logger.error(f"clear_collection error: {e}")
             return {"success": False, "error": str(e)}
 
     async def optimize_collection(self) -> dict:
@@ -964,10 +1219,10 @@ class QdrantService:
                 await asyncio.to_thread(client.update_collection, collection_name=self.collection, optimizer_config=qmodels.OptimizersConfigDiff(indexing_threshold=0))
                 return {"success": True, "message": "Optimization triggered"}
             except Exception as e:
-                log.warning(f"optimize_collection failed: {e}")
+                logger.warning(f"optimize_collection failed: {e}")
                 return {"success": False, "error": str(e)}
         except Exception as e:
-            log.error(f"optimize_collection error: {e}")
+            logger.error(f"optimize_collection error: {e}")
             return {"success": False, "error": str(e)}
 
 
@@ -1009,7 +1264,7 @@ async def health():
             else:
                 basic_health['metrics'] = monitor.get_stats()
         except Exception as e:
-            log.warning(f"Failed to get api monitor health: {e}")
+            logger.warning(f"Failed to get api monitor health: {e}")
 
         # Qdrant: client presence and collection readiness
         try:
@@ -1058,7 +1313,7 @@ async def health():
                 if mem:
                     basic_health['memory_mb'] = mem.get('rss_mb', 0)
         except Exception as e:
-            log.warning(f"Failed to get gc_manager memory info: {e}")
+            logger.warning(f"Failed to get gc_manager memory info: {e}")
 
         # Add middleware health if available
         try:
@@ -1071,14 +1326,14 @@ async def health():
                     'cleanup_runs': middleware_health.get('cleanup_runs', 0),
                 }
         except Exception as e:
-            log.warning(f"Failed to get cleanup_middleware health: {e}")
+            logger.warning(f"Failed to get cleanup_middleware health: {e}")
 
         # Response code
         status_code = 200 if basic_health["status"] == "healthy" else 503
         return jsonify(basic_health), status_code
 
     except Exception as e:
-        log.exception('Health check error: %s', e)
+        logger.exception('Health check error: %s', e)
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
@@ -1091,7 +1346,7 @@ async def health_gc():
         stats = await gc_manager.get_statistics()
         return jsonify({"status": "ok", "gc": stats})
     except Exception as e:
-        log.exception('Failed to get GC stats: %s', e)
+        logger.exception('Failed to get GC stats: %s', e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -1105,7 +1360,7 @@ async def health_middleware():
         stats = await middleware.get_health_metrics()
         return jsonify({"status": "ok", "middleware": stats})
     except Exception as e:
-        log.exception('Failed to get middleware stats: %s', e)
+        logger.exception('Failed to get middleware stats: %s', e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -1117,8 +1372,20 @@ async def index():
     return await render_template('index.html', welcome_prompt=welcome_prompt, demo_mode=demo_mode)
 
 
+@app.route('/monitor')
+async def monitor_stats():
+    """API monitoring statistics endpoint"""
+    try:
+        stats = await monitor.get_stats_async()
+        return jsonify(stats)
+    except Exception as e:
+        logger.exception(f"Failed to get monitor stats: {e}")
+        return jsonify({"error": "Failed to get stats", "details": str(e)}), 500
+
+
 @app.route('/upload', methods=['POST'])
 async def upload_file():
+    request_id = monitor.start_request('/upload', 'POST')
     # Accept either multipart file uploads or JSON with 'text' and optional 'filename'
     form = await request.files
     if 'file' in form:
@@ -1132,6 +1399,7 @@ async def upload_file():
             filename = payload.get('filename', f"upload-{int(time.time())}")
             text = payload['text']
         else:
+            monitor.end_request(request_id, success=False, error="file field or JSON text required")
             return jsonify({"error": "file field or JSON text required"}), 400
 
     chunks = await chunk_text_async(text)
@@ -1141,15 +1409,17 @@ async def upload_file():
     if settings.admin_token:
         auth = request.headers.get('Authorization', '')
         if not auth.startswith('Bearer '):
+            monitor.end_request(request_id, success=False, error="unauthorized")
             return jsonify({'error': 'unauthorized'}), 401
         token = auth.split(' ', 1)[1].strip()
         if token != settings.admin_token:
+            monitor.end_request(request_id, success=False, error="unauthorized")
             return jsonify({'error': 'unauthorized'}), 401
 
     # Store in Qdrant if available, otherwise in-memory
     if not lifecycle.qdrant_client:
         # Batch process embeddings even in demo mode to avoid log spam and overhead
-        embeddings_batch = await embeddings.embed_texts(chunks, provider=settings.embedding_provider, context=filename)
+        embeddings_batch = await embedding_adapter.embed_texts(chunks, provider=settings.embedding_provider, context=filename)
         
         chunk_objs = []
         for c, emb in zip(chunks, embeddings_batch):
@@ -1163,12 +1433,21 @@ async def upload_file():
             "uploaded_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "type": filename.split('.')[-1].upper() if '.' in filename else 'TXT'
         })
-        return jsonify({"id": doc_id, "filename": filename, "status": "uploaded (fallback)"})
+        embedded = sum(1 for c in chunk_objs if c.get("embed") is not None)
+        monitor.end_request(request_id, success=True)
+        return jsonify({
+            "id": doc_id,
+            "filename": filename,
+            "status": "uploaded (fallback)",
+            "requested_chunks": len(chunks),
+            "embedded_chunks": embedded,
+            "embedding_provider": getattr(settings, "embedding_provider", None),
+        })
 
     # Index into Qdrant (both demo and prod modes)
     # Create points and upsert
     points = []
-    embeddings_batch = await embeddings.embed_texts(chunks, provider=settings.embedding_provider, context=filename)
+    embeddings_batch = await embedding_adapter.embed_texts(chunks, provider=settings.embedding_provider, context=filename)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     file_type = filename.split('.')[-1].upper() if '.' in filename else 'TXT'
     
@@ -1185,19 +1464,261 @@ async def upload_file():
             }
         ))
 
+    # Before upsert: verify Qdrant collection vector size matches embedding dim
     try:
-        log.info('Upserting %d points into collection %s', len(points), settings.qdrant_collection)
-        await asyncio.to_thread(lifecycle.qdrant_client.upsert, collection_name=settings.qdrant_collection, points=points)
-        # Verify by counting points after upsert
+        coll_dim = None
         try:
-            count = await asyncio.to_thread(lifecycle.qdrant_client.count, collection_name=settings.qdrant_collection)
-            log.info("After upsert, collection '%s' contains %s points", settings.qdrant_collection, getattr(count, 'count', count))
-        except Exception:
-            log.debug('Could not retrieve collection count after upsert')
-        return jsonify({"id": doc_id, "filename": filename, "status": "indexed"})
+            coll_info = await asyncio.to_thread(lifecycle.qdrant_client.get_collection, settings.qdrant_collection)
+            if isinstance(coll_info, dict):
+                vectors = coll_info.get('vectors') or {}
+                coll_dim = vectors.get('size') if isinstance(vectors, dict) else None
+            else:
+                vectors = getattr(coll_info, 'vectors', None)
+                coll_dim = getattr(vectors, 'size', None) if vectors is not None else None
+        except Exception as _:
+            logger.debug('Could not fetch collection metadata before upsert; proceeding to upsert and handling errors if any')
+
+        emb_dim = None
+        if embeddings_batch and len(embeddings_batch) > 0 and embeddings_batch[0] is not None:
+            emb_dim = len(embeddings_batch[0])
+
+        if coll_dim is not None and emb_dim is not None and coll_dim != emb_dim:
+            # Dimension mismatch — reject with helpful message
+            msg = (f"Embedding dimension mismatch: collection vectors are size {coll_dim} but current embeddings are size {emb_dim}. "
+                   f"This prevents upsert. To resolve, recreate the collection with size={emb_dim} or create a new collection. "
+                   "Use the admin endpoint POST /admin/collection (mode=recreate or mode=new) to proceed.")
+            logger.warning(msg)
+            monitor.end_request(request_id, success=False, error=msg)
+            return jsonify({"error": "embedding_dim_mismatch", "details": msg}), 409
+
+        logger.info('Upserting %d points into collection %s', len(points), settings.qdrant_collection)
+        try:
+            await asyncio.to_thread(lifecycle.qdrant_client.upsert, collection_name=settings.qdrant_collection, points=points)
+        except ValueError as e:
+            # Likely a numpy broadcast / dim mismatch error from local Qdrant implementation
+            logger.exception('Failed to upsert vectors (likely dim mismatch): %s', e)
+            # Try to read collection vector size for a clearer message
+            coll_dim = None
+            try:
+                coll_info = await asyncio.to_thread(lifecycle.qdrant_client.get_collection, settings.qdrant_collection)
+                if isinstance(coll_info, dict):
+                    vectors = coll_info.get('vectors') or {}
+                    coll_dim = vectors.get('size') if isinstance(vectors, dict) else None
+                else:
+                    vectors = getattr(coll_info, 'vectors', None)
+                    coll_dim = getattr(vectors, 'size', None) if vectors is not None else None
+            except Exception:
+                logger.debug('Could not fetch collection metadata after upsert failure')
+
+            detail_msg = str(e)
+            if coll_dim is not None:
+                detail_msg = f"Collection vector size is {coll_dim}; attempted upsert vector had incompatible shape. Error: {str(e)}"
+            monitor.end_request(request_id, success=False, error=detail_msg)
+            return jsonify({"error": "embedding_dim_mismatch", "details": detail_msg,
+                            "hint": "Recreate or create a collection with EMBEDDING_DIM=3072 using /admin/collection then reindex."}), 409
+        except Exception as e:
+            raise
+        valid_embeds = sum(1 for e in embeddings_batch if e is not None)
+        failed = max(0, len(embeddings_batch) - valid_embeds)
+        monitor.end_request(request_id, success=True)
+        return jsonify({
+            "id": doc_id,
+            "filename": filename,
+            "status": "indexed",
+            "requested_chunks": len(embeddings_batch),
+            "embedded_chunks": valid_embeds,
+            "failed_chunks": failed,
+            "embedding_provider": getattr(settings, "embedding_provider", None),
+        })
     except Exception as e:
-        log.exception('Failed to upsert points into Qdrant: %s', e)
-        return jsonify({"error": "failed to index document", "detail": str(e)}), 500
+        logger.exception('Failed to upsert vectors: %s', e)
+        monitor.end_request(request_id, success=False, error=str(e))
+        return jsonify({"error": "Failed to index document", "details": str(e)}), 500
+
+
+
+@app.route('/admin/collection', methods=['POST'])
+@auth_manager.require_admin
+async def admin_manage_collection():
+    """Admin endpoint to recreate or create a Qdrant collection using current EMBEDDING_DIM.
+
+    POST JSON body fields:
+      - mode: 'recreate' (destructive) or 'new' (create new collection) (defaults to 'new')
+      - confirm: true (required for 'recreate')
+      - new_collection_name: (required for mode 'new')
+
+    Example:
+      {"mode": "recreate", "confirm": true}
+      {"mode": "new", "new_collection_name": "my_collection_3072"}
+    """
+    if not lifecycle.qdrant_client:
+        return jsonify({"error": "qdrant_unavailable", "details": "No Qdrant client is connected."}), 503
+
+    payload = await request.get_json(silent=True) or {}
+    mode = payload.get('mode', 'new')
+    if mode not in ('recreate', 'new'):
+        return jsonify({"error": "invalid_mode", "details": "mode must be 'recreate' or 'new'"}), 400
+
+    if mode == 'recreate':
+        if not payload.get('confirm'):
+            return jsonify({"error": "confirm_required", "details": "Set 'confirm': true to recreate (destructive)."}), 400
+        try:
+            logger.info('Admin requested recreate of collection %s with size=%s', settings.qdrant_collection, settings.embedding_dim)
+            await asyncio.to_thread(lifecycle.qdrant_client.recreate_collection, collection_name=settings.qdrant_collection,
+                                     vectors_config=qmodels.VectorParams(size=settings.embedding_dim, distance=qmodels.Distance.COSINE))
+            return jsonify({"status": "recreated", "collection": settings.qdrant_collection, "size": settings.embedding_dim})
+        except Exception as e:
+            logger.exception('Failed to recreate collection: %s', e)
+            return jsonify({"error": "failed", "details": str(e)}), 500
+
+    # mode == 'new'
+    new_name = payload.get('new_collection_name')
+    if not new_name:
+        return jsonify({"error": "missing_new_collection_name", "details": "Specify new_collection_name for mode 'new'."}), 400
+    try:
+        logger.info('Admin requested create of new collection %s with size=%s', new_name, settings.embedding_dim)
+        await asyncio.to_thread(lifecycle.qdrant_client.create_collection, collection_name=new_name,
+                                 vectors_config=qmodels.VectorParams(size=settings.embedding_dim, distance=qmodels.Distance.COSINE))
+        return jsonify({"status": "created", "collection": new_name, "size": settings.embedding_dim})
+    except Exception as e:
+        logger.exception('Failed to create collection: %s', e)
+        return jsonify({"error": "failed", "details": str(e)}), 500
+
+
+@app.route('/admin/reindex_in_memory', methods=['POST'])
+@auth_manager.require_admin
+async def admin_reindex_in_memory():
+    """Upsert all DOCUMENTS currently stored in-memory into the configured collection.
+    This helps re-populate a newly created/recreated collection without re-uploading files.
+    """
+    if not lifecycle.qdrant_client:
+        return jsonify({"error": "qdrant_unavailable", "details": "No Qdrant client is connected."}), 503
+
+    # Build list of points from DOCUMENTS
+    total = 0
+    failed = 0
+    try:
+        for d in DOCUMENTS:
+            filename = d.get('filename')
+            chunks = d.get('chunks', [])
+            # Ensure embeddings for chunks are present and correct dim; compute where missing
+            texts_to_compute = []
+            idxs_to_compute = []
+            for i, c in enumerate(chunks):
+                vec = c.get('embed') or c.get('vector')
+                if not isinstance(vec, list) or len(vec) != settings.embedding_dim:
+                    texts_to_compute.append(c.get('text',''))
+                    idxs_to_compute.append(i)
+            if texts_to_compute:
+                try:
+                    new_embs = await embedding_adapter.embed_texts(texts_to_compute, provider=settings.embedding_provider, context=filename)
+                except Exception as e:
+                    logger.exception('Failed to compute embeddings during reindex: %s', e)
+                    # mark all as failed for this document
+                    failed += len(texts_to_compute)
+                    continue
+                # assign back
+                for idx, vec in zip(idxs_to_compute, new_embs):
+                    chunks[idx]['embed'] = vec
+
+            # Prepare points
+            points = []
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+            file_type = filename.split('.')[-1].upper() if filename and '.' in filename else 'TXT'
+            for idx, c in enumerate(chunks):
+                vec = c.get('embed') or c.get('vector')
+                if not isinstance(vec, list) or len(vec) != settings.embedding_dim:
+                    failed += 1
+                    continue
+                points.append(qmodels.PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vec,
+                    payload={
+                        "filename": filename,
+                        "chunk_index": idx,
+                        "text": c.get('text',''),
+                        "uploaded_at": d.get('uploaded_at') or timestamp,
+                        "type": file_type,
+                    }
+                ))
+            if not points:
+                continue
+            # upsert in reasonable batches
+            batch_size = 500
+            for i in range(0, len(points), batch_size):
+                batch = points[i:i+batch_size]
+                await asyncio.to_thread(lifecycle.qdrant_client.upsert, collection_name=settings.qdrant_collection, points=batch)
+                total += len(batch)
+        return jsonify({"status": "reindexed", "upserted_points": total, "failed_chunks": failed})
+    except Exception as e:
+        logger.exception('Reindex in-memory failed: %s', e)
+        return jsonify({"error": "failed", "details": str(e)}), 500 
+
+
+
+@app.route('/admin/upload_vectors', methods=['POST'])
+@auth_manager.require_admin
+async def admin_upload_vectors():
+    """Admin endpoint to upload pre-computed vectors in JSON format.
+
+    Expected JSON format:
+    {
+        "documents": [
+            {"id": "doc1", "filename": "file.pdf", "chunks": [{"text": "...", "vector": [...], "chunk_index": 0}, ...]},
+            ...
+        ]
+    }
+    """
+    payload = await request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "JSON payload required"}), 400
+
+    docs = payload.get('documents') or ( [payload.get('document')] if payload.get('document') else None )
+    if not docs:
+        return jsonify({"error": "documents field missing or empty"}), 400
+
+    results = []
+    for doc in docs:
+        try:
+            doc_id = doc.get('id') or str(uuid.uuid4())
+            filename = doc.get('filename') or f"upload-{int(time.time())}"
+            chunks = doc.get('chunks') or []
+            # Basic validation
+            if not isinstance(chunks, list) or not chunks:
+                results.append({"id": doc_id, "status": "skipped", "reason": "no chunks provided"})
+                continue
+
+            # Ensure each chunk has vector
+            ok_chunks = []
+            for i, c in enumerate(chunks):
+                txt = c.get('text','')
+                vec = c.get('vector') or c.get('embed')
+                if not isinstance(vec, list) or len(vec) == 0:
+                    # attempt to compute deterministic embedding if in demo
+                    if getattr(settings, 'demo', False):
+                        vec = embedding_service.deterministic_embed(txt)
+                    else:
+                        results.append({"id": doc_id, "status": "skipped", "reason": f"missing vector for chunk {i}"})
+                        ok_chunks = None
+                        break
+                ok_chunks.append({"text": txt, "vector": vec, "chunk_index": c.get('chunk_index', i)})
+
+            if ok_chunks is None:
+                continue
+
+            # Upsert via adapter
+            try:
+                upserted = await qdrant_adapter.upsert_document_vectors(doc_id, filename, ok_chunks)
+                results.append({"id": doc_id, "status": "upserted", "upserted": upserted})
+            except Exception as e:
+                logger.exception('Failed to upsert document %s: %s', doc_id, e)
+                results.append({"id": doc_id, "status": "error", "detail": str(e)})
+
+        except Exception as e:
+            logger.exception('Error processing uploaded doc: %s', e)
+            results.append({"id": doc.get('id', 'unknown'), "status": "error", "detail": str(e)})
+
+    return jsonify({"results": results})
 
 
 @app.route('/documents')
@@ -1245,20 +1766,23 @@ async def get_document(doc_id):
 
 @app.route('/search', methods=['POST'])
 async def search():
+    request_id = monitor.start_request('/search', 'POST')
     payload = await request.get_json()
     if not payload or 'query' not in payload:
+        monitor.end_request(request_id, success=False, error="query required")
         return jsonify({"error": "query required"}), 400
     query = payload.get('query', '').strip()
     top_k = int(payload.get('top_k', 5))
     simulate_latency = payload.get('simulate_latency', True)
 
     if not query:
+        monitor.end_request(request_id, success=False, error="query is required")
         return jsonify({"error": "query is required"}), 400
 
     if simulate_latency:
         await asyncio.sleep(random.uniform(0.05, 0.4))
 
-    q_embs = await embeddings.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}")
+    q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}")
     q_emb = q_embs[0]
 
     results: List[Dict[str, Any]] = []
@@ -1297,7 +1821,7 @@ async def search():
 
     answer = None
     # Debug: log AI branch decisions
-    log.info("AI branch check: demo=%s, AsyncAzureOpenAI=%s, key=%s, endpoint=%s, deployment=%s", settings.demo, bool(AsyncAzureOpenAI), getattr(settings, 'azure_openai_api_key', None), getattr(settings, 'azure_openai_endpoint', None), getattr(settings, 'azure_deployment_chat', None))
+    logger.info("AI branch check: demo=%s, AsyncAzureOpenAI=%s, key=%s, endpoint=%s, deployment=%s", settings.demo, bool(AsyncAzureOpenAI), getattr(settings, 'azure_openai_api_key', None), getattr(settings, 'azure_openai_endpoint', None), getattr(settings, 'azure_deployment_chat', None))
 
     # Demo-mode branch: use deterministic DemoLLM and clearly note that no chat model is available
     if settings.demo:
@@ -1319,7 +1843,7 @@ async def search():
                 cleaned, source_indicator = await demo.generate(query, context)
                 answer = f"(Demo mode - no chat model available) {cleaned}"
         except Exception as e:
-            log.exception("Demo LLM failed: %s", e)
+            logger.exception("Demo LLM failed: %s", e)
             answer = "(Demo mode) Sorry, demo generation failed."
 
     elif not settings.demo and AsyncAzureOpenAI:
@@ -1339,15 +1863,18 @@ async def search():
                 else:
                     answer = cleaned
         except Exception as e:
-            log.exception("RAG Generation failed")
+            logger.exception("RAG Generation failed")
             answer = f"Error generating answer: {str(e)}"
 
+    monitor.end_request(request_id, success=True)
     return jsonify({
-        "results": top, 
-        "demo": settings.demo, 
+        "results": top,
+        "used_documents": [{"doc_id": r.get("doc_id"), "filename": r.get("filename"), "score": r.get("score"), "chunk_text": r.get("chunk_text")} for r in top],
+        "demo": settings.demo,
         "message": DEMO_BANNER if settings.demo else "",
         "answer": answer,
-        "sources": list(unique_files) if 'unique_files' in locals() else []
+        "sources": list(unique_files) if 'unique_files' in locals() else [],
+        "embedding_provider": getattr(settings, "embedding_provider", None)
     })
 
 
@@ -1366,15 +1893,15 @@ async def optimize_store():
         try:
             
             # Attempt to trigger optimization via the higher-level service
-            log.info('Triggering Qdrant optimization via QdrantService')
+            logger.info('Triggering Qdrant optimization via QdrantService')
             try:
                 result = await qdrant_service.optimize_collection()
                 return jsonify(result)
             except Exception as e:
-                log.exception('Failed to trigger optimization: %s', e)
+                logger.exception('Failed to trigger optimization: %s', e)
                 return jsonify({"error": "optimization failed", "detail": str(e)}), 500
         except Exception:
-            log.exception('Failed to optimize Qdrant collection')
+            logger.exception('Failed to optimize Qdrant collection')
             return jsonify({"error": "optimization failed"}), 500
             
     return jsonify({"status": "optimized"})
@@ -1402,10 +1929,10 @@ async def reset_store():
                 deleted = result.get('deleted', 0)
                 return jsonify({"status": "cleared", "deleted": deleted, "message": f"Cleared {deleted} points."})
             else:
-                log.warning('clear_collection reported failure: %s', result)
+                logger.warning('clear_collection reported failure: %s', result)
                 return jsonify({"error": result.get('error', 'failed to clear collection')}), 500
         except Exception as e:
-            log.exception('Failed to clear Qdrant collection via service: %s', e)
+            logger.exception('Failed to clear Qdrant collection via service: %s', e)
             return jsonify({"error": "failed to clear collection", "detail": str(e)}), 500
 
     # Fallback response (no qdrant or demo mode)
@@ -1451,11 +1978,11 @@ async def delete_document(doc_id):
                 )
                 return jsonify({"status": "deleted"})
             except Exception as e:
-                log.exception('Failed to delete document with filters: %s', e)
+                logger.exception('Failed to delete document with filters: %s', e)
                 return jsonify({"error": "failed to delete"}), 500
 
     except Exception as e:
-        log.exception('Failed to delete document')
+        logger.exception('Failed to delete document')
         return jsonify({"error": "failed to delete"}), 500
 
 
@@ -1464,8 +1991,132 @@ async def _on_startup():
     # connect qdrant if configured
     await lifecycle.startup()
 
+    # Validate Azure/OpenAI settings and initialize AI client when not in demo mode
+    try:
+        missing = []
+        required = [
+            'azure_openai_api_key',
+            'azure_openai_api_version',
+            'azure_openai_endpoint',
+            'azure_deployment_chat',
+        ]
+        for k in required:
+            if not getattr(settings, k, None):
+                missing.append(k)
+
+        if getattr(settings, 'demo', False):
+            logger.info('Demo mode active - skipping Azure AI client initialization')
+        else:
+            if missing:
+                logger.warning('Azure AI settings incomplete - missing: %s. AI client will not be initialized on startup.', ', '.join(missing))
+            else:
+                try:
+                    # Initialize AI client (will log on success/failure)
+                    support_agent.ai_manager.initialize_client()
+                    logger.info('AI client initialized on startup using Azure settings')
+                except Exception as e:
+                    logger.exception('Failed to initialize AI client on startup: %s', e)
+    except Exception as e:
+        logger.exception('Error during Azure settings validation on startup: %s', e)
+
+    # Start ShutdownManager if available (optional; tolerate different module names)
+    try:
+        _shutdown_started = False
+        for candidate in ("module.ShutdownManager", "Module.ShutdownManager", "ShutdownManager"):
+            try:
+                mod = importlib.import_module(candidate)
+            except Exception:
+                continue
+            ShutdownManagerCls = getattr(mod, "ShutdownManager", None)
+            if not ShutdownManagerCls:
+                continue
+            try:
+                shutdown_manager = ShutdownManagerCls(app, port=getattr(settings, "shutdown_port", 55668), token=getattr(settings, "shutdown_token", None))
+                setattr(app, 'shutdown_manager', shutdown_manager)
+                start_fn = getattr(shutdown_manager, "start_monitoring", None)
+                if inspect.iscoroutinefunction(start_fn):
+                    asyncio.create_task(start_fn())
+                elif callable(start_fn):
+                    try:
+                        # run sync starter in thread to avoid blocking
+                        asyncio.get_running_loop().run_in_executor(None, start_fn)
+                    except Exception:
+                        pass
+                logger.info("ShutdownManager monitoring started via %s", candidate)
+                _shutdown_started = True
+                break
+            except Exception as e:
+                logger.debug("ShutdownManager instantiation/starting failed for %s: %s", candidate, e)
+        if not _shutdown_started:
+            logger.debug("ShutdownManager not found; skipping")
+    except Exception as e:
+        logger.debug("Error while trying to start ShutdownManager: %s", e)
+
+    # Schedule GC periodic cleanup if gc_manager exists and supports periodic_cleanup
+    if 'gc_manager' in globals() and gc_manager is not None and hasattr(gc_manager, 'periodic_cleanup'):
+        async def _gc_loop():
+            while True:
+                try:
+                    if gc_manager:
+                        res = gc_manager.periodic_cleanup()
+                        if inspect.isawaitable(res):
+                            await res
+                        else:
+                            # run sync periodic_cleanup in executor
+                            await asyncio.get_running_loop().run_in_executor(None, gc_manager.periodic_cleanup)
+                except Exception as e:
+                    logger.exception("GC periodic cleanup error: %s", e)
+                interval = getattr(gc_manager, 'gc_interval', 300) or 300
+                await asyncio.sleep(max(5, interval))
+        setattr(app, '_gc_task', asyncio.create_task(_gc_loop()))
+        logger.info("GC periodic background task scheduled")
+    else:
+        logger.debug("gc_manager not available or missing periodic_cleanup; skipping GC background task")
+
 @app.after_serving
 async def _on_shutdown():
+    logger.info("Shutting down background tasks and cleanup managers")
+    # Cancel GC task if present
+    task = getattr(app, '_gc_task', None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except Exception:
+            pass
+    # Stop ShutdownManager if running (support sync/async stop_monitoring)
+    sm = getattr(app, 'shutdown_manager', None)
+    if sm:
+        try:
+            stop_fn = getattr(sm, 'stop_monitoring', None)
+            if inspect.iscoroutinefunction(stop_fn):
+                await stop_fn()
+            elif callable(stop_fn):
+                await asyncio.get_running_loop().run_in_executor(None, stop_fn)
+        except Exception as e:
+            logger.debug("ShutdownManager stop error: %s", e)
+    # Middleware cleanup (support sync/async cleanup_on_shutdown)
+    cleanup_mw = getattr(app, 'cleanup_middleware', None)
+    if cleanup_mw:
+        try:
+            fn = getattr(cleanup_mw, 'cleanup_on_shutdown', None)
+            if inspect.iscoroutinefunction(fn):
+                await fn()
+            elif callable(fn):
+                await asyncio.get_running_loop().run_in_executor(None, fn)
+        except Exception as e:
+            logger.debug("cleanup_middleware cleanup failed: %s", e)
+    # GC cleanup (support sync/async cleanup_on_shutdown)
+    if 'gc_manager' in globals() and gc_manager is not None and hasattr(gc_manager, 'cleanup_on_shutdown'):
+        try:
+            fn = getattr(gc_manager, 'cleanup_on_shutdown')
+            if inspect.iscoroutinefunction(fn):
+                await fn()
+            elif callable(fn):
+                await asyncio.get_running_loop().run_in_executor(None, fn)
+        except Exception as e:
+            logger.debug("gc_manager cleanup failed: %s", e)
+
     await lifecycle.shutdown()
 
 if __name__ == '__main__':
