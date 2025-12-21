@@ -961,4 +961,6 @@ async def _on_shutdown():
     await lifecycle.shutdown()
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=8002, debug=True)
+    import os
+    port = int(os.environ.get('PORT', 8002))
+    app.run(host='0.0.0.0', port=port, debug=True)
