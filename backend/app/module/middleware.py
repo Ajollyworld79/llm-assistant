@@ -113,10 +113,10 @@ class EnhancedCleanupMiddleware:
             # Emergency if memory crosses emergency fraction of critical threshold
             if mem > (self.memory_critical_threshold_mb * self.gc_emergency_threshold):
                 logger.warning(f"EMERGENCY memory usage: {mem:.1f} MB (threshold {self.gc_emergency_threshold * self.memory_critical_threshold_mb:.1f} MB)")
-                await self._emergency_cleanup()
+                asyncio.create_task(self._emergency_cleanup())
             elif mem > self.memory_critical_threshold_mb:
                 logger.warning(f"CRITICAL memory usage: {mem:.1f} MB")
-                await self._emergency_cleanup()
+                asyncio.create_task(self._emergency_cleanup())
             elif mem > self.memory_warning_threshold_mb:
                 logger.warning(f"High memory usage: {mem:.1f} MB")
 

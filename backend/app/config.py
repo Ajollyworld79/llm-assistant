@@ -55,11 +55,11 @@ class Settings:
         self.GC_MIN_INTERVAL = int(os.getenv('GC_MIN_INTERVAL', '1800'))
         self.GC_MAX_INTERVAL = int(os.getenv('GC_MAX_INTERVAL', '3600'))
         # Memory thresholds (MB)
-        self.MEMORY_WARNING_THRESHOLD = int(os.getenv('MEMORY_WARNING_THRESHOLD', '512'))
-        self.MEMORY_CRITICAL_THRESHOLD = int(os.getenv('MEMORY_CRITICAL_THRESHOLD', '1024'))
+        self.MEMORY_WARNING_THRESHOLD = int(os.getenv('MEMORY_WARNING_THRESHOLD', '1024'))
+        self.MEMORY_CRITICAL_THRESHOLD = int(os.getenv('MEMORY_CRITICAL_THRESHOLD', '2048'))
         # Performance settings
         self.GC_MAX_MEMORY_SAMPLES = int(os.getenv('GC_MAX_MEMORY_SAMPLES', '100'))
-        self.GC_EMERGENCY_THRESHOLD = float(os.getenv('GC_EMERGENCY_THRESHOLD', '0.85'))
+        self.GC_EMERGENCY_THRESHOLD = float(os.getenv('GC_EMERGENCY_THRESHOLD', '0.90'))
         self.MEMORY_CACHE_DURATION = int(os.getenv('MEMORY_CACHE_DURATION', '3'))
         self.INACTIVITY_RESET_HOURS = int(os.getenv('INACTIVITY_RESET_HOURS', '2'))
 

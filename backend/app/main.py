@@ -367,7 +367,7 @@ async def upload_file():
     form = await request.files
     if 'file' in form:
         file = form['file']
-        content = file.read()
+        content = await asyncio.to_thread(file.read)
         filename = file.filename or f"upload-{int(time.time())}"
         text = await parse_content(filename, content)
     else:
