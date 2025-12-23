@@ -398,6 +398,25 @@ textarea:focus {
   transform: scale(0.95);
   transition: transform 0.2s;
 }
+
+/* Corner Credits (fixed on left) */
+.corner-credits {
+  position: fixed;
+  left: calc(260px + 16px); /* sidebar width + gap */
+  bottom: 12px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.85);
+  padding: 6px 10px;
+  border-radius: 8px;
+  box-shadow: 0 4px 10px rgba(2,6,23,0.06);
+  z-index: 30;
+  pointer-events: none; /* avoid capturing clicks */
+}
+
+@media (max-width: 720px) {
+  .corner-credits { left: 12px; right: 12px; border-radius: 6px; font-size: 0.8rem; }
+}
 .modal-backdrop.open .modal-panel { transform: scale(1); }
 
 /* Toast notifications */

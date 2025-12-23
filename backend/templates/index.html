@@ -620,5 +620,15 @@
             alert("Token saved.");
         }
     </script>
+
+    <div id="corner-credits" class="corner-credits" aria-hidden="true">© <span id="corner-year"></span> Gustav Wind Christensen • Built with Quart &amp; Qdrant</div>
+    <script>
+      // Populate dynamic year for corner credits
+      (function() {
+        try {
+          document.getElementById('corner-year').textContent = new Date().getFullYear();
+        } catch(e) { /* ignore in older browsers */ }
+      })();
+    </script>
 </body>
 </html>
