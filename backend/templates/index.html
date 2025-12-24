@@ -10,6 +10,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+    <button class="menu-toggle" aria-label="Open menu" onclick="toggleSidebar()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <div class="sidebar-backdrop" onclick="closeSidebar()"></div>
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar">
@@ -38,6 +42,10 @@
 
         <!-- Main Content -->
         <main class="main-content">
+            <div class="top-nav" role="navigation" aria-label="Mobile navigation">
+                <div class="nav-item" onclick="setView('chat')" id="nav-chat-mobile">Chat Assistant</div>
+                <div class="nav-item" onclick="setView('admin')" id="nav-admin-mobile">Knowledge Base</div>
+            </div>
             {% if demo_mode %}
             <div id="demo-banner" class="demo-banner">
                 <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -189,8 +197,13 @@
             
             document.getElementById('view-' + view).classList.add('active');
             document.getElementById('nav-' + view).classList.add('active');
+            const mobileNav = document.getElementById('nav-' + view + '-mobile');
+            if (mobileNav) mobileNav.classList.add('active');
             
             if (view === 'admin') refreshDocs();
+            
+            // Close mobile sidebar after navigation to reveal content
+            if (window.innerWidth <= 720) closeSidebar();
         }
 
         async function checkHealth() {
@@ -612,6 +625,29 @@
         document.getElementById('doc-modal').addEventListener('click', (e) => {
             if (e.target.id === 'doc-modal') closeModal();
         });
+
+        // Mobile sidebar toggle helpers
+        function toggleSidebar() {
+            const sb = document.querySelector('.sidebar');
+            const backdrop = document.querySelector('.sidebar-backdrop');
+            if (!sb) return;
+            sb.classList.toggle('open');
+            backdrop && backdrop.classList.toggle('show');
+        }
+        function closeSidebar() {
+            const sb = document.querySelector('.sidebar');
+            const backdrop = document.querySelector('.sidebar-backdrop');
+            if (!sb) return;
+            sb.classList.remove('open');
+            backdrop && backdrop.classList.remove('show');
+        }
+        // Close sidebar when clicking backdrop
+        document.addEventListener('click', (e) => {
+            const backdrop = document.querySelector('.sidebar-backdrop');
+            if (backdrop && backdrop.classList.contains('show') && e.target === backdrop) closeSidebar();
+        });
+        // Ensure sidebar is closed when resizing to desktop
+        window.addEventListener('resize', () => { if (window.innerWidth > 720) closeSidebar(); });
 
         function saveToken() {
             const t = document.getElementById('token-input').value.trim();
