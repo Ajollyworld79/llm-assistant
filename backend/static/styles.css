@@ -126,20 +126,6 @@ body {
   scroll-behavior: smooth;
 }
 
-/* Welcome box shown above the chat history, not part of message flow */
-.welcome-box {
-  max-width: 900px;
-  margin: 1.25rem auto 0 auto;
-  padding: 0 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.welcome-box .msg-bubble {
-  background: #f8fafc;
-  border: 1px solid var(--border);
-  color: var(--text-main);
-}
 
 .message {
   display: flex;
@@ -283,6 +269,20 @@ textarea:focus {
   padding: 2rem;
   margin-bottom: 2rem;
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.status-indicator {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.table-responsive {
+  overflow-x: auto;
 }
 
 .drop-zone {
@@ -538,10 +538,6 @@ textarea:focus {
     -webkit-overflow-scrolling: touch;
   }
   
-  .welcome-box { 
-    padding: 0 1rem; 
-    margin: 1rem 0;
-  }
   
   .message {
     max-width: 92%;
@@ -600,6 +596,12 @@ textarea:focus {
     margin-bottom: 1.5rem;
   }
   
+  .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  
   .panel-header h2 {
     font-size: 1.25rem;
   }
@@ -630,7 +632,7 @@ textarea:focus {
     display: block;
     border: none;
   }
-  .doc-table thead { display: none; }
+  .doc-table thead { display: none !important; }
   .doc-table tbody { display: block; }
   
   .doc-table tr {
@@ -645,12 +647,19 @@ textarea:focus {
   }
   
   .doc-table td {
-    padding: 0.25rem 0;
+    padding: 0.5rem 0;
     border: none;
     display: flex;
     align-items: center;
     justify-content: space-between;
     font-size: 0.9rem;
+  }
+  
+  .doc-table td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.85rem;
   }
   
   /* First cell (Filename) as Header */
@@ -664,9 +673,10 @@ textarea:focus {
     border-bottom: 1px solid var(--border);
     padding-left: 0;
   }
+  .doc-table td:first-child::before { display: none; }
   
-  /* Last cell (Actions) at bottom */
-  .doc-table td:last-child {
+  /* Actions cell */
+  .doc-table td.actions-cell {
     margin-top: 0.75rem;
     justify-content: flex-end;
     gap: 0.5rem;
@@ -674,6 +684,7 @@ textarea:focus {
     padding-top: 0.75rem;
     padding-right: 0;
   }
+  .doc-table td.actions-cell::before { display: none; }
   
   .btn-sm {
     padding: 0.375rem 0.75rem;

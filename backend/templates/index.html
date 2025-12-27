@@ -58,14 +58,12 @@
             <!-- Chat View -->
             <div id="view-chat" class="view active">
                 <div class="chat-container">
-                    <!-- Welcome banner (static, not part of chat-history) -->
-                    <div class="welcome-box">
-                        <div class="message-label">AI Assistant</div>
-                        <div class="msg-bubble">{{ welcome_prompt|trim }}</div>
-                    </div>
-
                     <div class="chat-history" id="chat-history">
-                        <!-- Messages go here -->
+                        <!-- Welcome message -->
+                        <div class="message bot">
+                            <div class="message-label">AI Assistant</div>
+                            <div class="msg-bubble">{{ welcome_prompt|trim }}</div>
+                        </div>
                     </div>
 
                     <div class="input-area">
@@ -134,14 +132,14 @@
                     </div>
 
                     <div class="panel">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                        <div class="section-header">
                             <h3>Indexed Documents</h3>
-                            <div style="font-size:0.85rem; color: var(--text-muted);">
+                            <div class="status-indicator">
                                 Status: <span id="system-status-badge" class="badge badge-txt">Checking...</span>
                             </div>
                         </div>
                         
-                        <div style="overflow-x: auto;">
+                        <div class="table-responsive">
                             <table class="doc-table">
                                 <thead>
                                     <tr>
@@ -485,11 +483,11 @@
                     
                     return `
                     <tr>
-                        <td><strong>${d.filename}</strong></td>
-                        <td><span class="badge ${badgeClass}">${d.type}</span></td>
-                        <td>${d.uploaded_at || 'N/A'}</td>
-                        <td>${d.chunks} chunks</td>
-                        <td>
+                        <td data-label="File"><strong>${d.filename}</strong></td>
+                        <td data-label="Type"><span class="badge ${badgeClass}">${d.type}</span></td>
+                        <td data-label="Indexed">${d.uploaded_at || 'N/A'}</td>
+                        <td data-label="Size">${d.chunks} chunks</td>
+                        <td class="actions-cell">
                             <button onclick="deleteDoc('${d.id}')" class="btn btn-danger btn-sm" title="Delete">
                                 <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                             </button>
