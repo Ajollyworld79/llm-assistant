@@ -523,19 +523,28 @@ textarea:focus {
     max-width: 100%; 
     margin: 0; 
     flex: 1;
-    height: auto;
+    /* Fix scrolling: ensure container takes full available height but not more */
+    height: calc(100dvh - 56px); 
     display: flex;
     flex-direction: column;
     padding-bottom: 0; 
     background: #fcfcfc;
   }
   
+  /* IMPORTANT: Prevent main scrollbar on chat view */
+  #view-chat {
+    overflow-y: hidden;
+    height: 100%;
+  }
+
   .chat-history { 
     flex: 1;
     padding: 1rem;
     gap: 1rem;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    /* Ensure it consumes space properly */
+    min-height: 0; 
   }
   
   
@@ -672,6 +681,9 @@ textarea:focus {
     padding-bottom: 0.75rem;
     border-bottom: 1px solid var(--border);
     padding-left: 0;
+    /* Handle long filenames */
+    overflow-wrap: break-word;
+    word-break: break-all;
   }
   .doc-table td:first-child::before { display: none; }
   
