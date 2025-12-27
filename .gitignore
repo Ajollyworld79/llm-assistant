@@ -10,3 +10,6 @@ dist/
 
 # frontend
 /frontend/node_modules/
+
+# Keep local_qdrant_db in Git for persistent storage
+# local_qdrant_db/ is now tracked
