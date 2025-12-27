@@ -38,6 +38,8 @@ htmlcov/
 # Local data
 *.db
 *.sqlite
+!local_qdrant_db/**/*.db
+!local_qdrant_db/**/*.sqlite
 *.log
 logs/
 
