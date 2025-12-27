@@ -8,7 +8,7 @@ python-dotenv
 pdfplumber
 python-docx
 numpy
-qdrant-client
+qdrant-client==1.15.1
 sentence-transformers
 fastembed
 pillow
