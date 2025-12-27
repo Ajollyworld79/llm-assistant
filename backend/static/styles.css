@@ -17,7 +17,8 @@ body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg-page);
   color: var(--text-main);
-  height: 100vh;
+  height: 100vh; /* Fallback */
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -26,7 +27,8 @@ body {
 .app-container {
   display: flex;
   flex: 1;
-  height: 100vh;
+  height: 100vh; /* Fallback */
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -51,7 +53,6 @@ body {
 }
 .brand svg { width: 24px; height: 24px; }
 
-/* Mobile toggle and compact top nav (hidden by default, enabled in media query) */
 .menu-toggle { display: none; }
 .top-nav { display: none; }
 
@@ -420,13 +421,18 @@ textarea:focus {
 
 @media (max-width: 768px) {
   /* Off-canvas sidebar: hidden by default, toggled via .open */
-  .app-container { flex-direction: column; height: auto; min-height: 100vh; overflow: visible; }
+  .app-container { 
+    flex-direction: column; 
+    height: 100vh; /* Fallback */
+    height: 100dvh;
+    overflow: hidden; 
+  }
 
   .sidebar {
     position: fixed;
     top: 0;
     left: 0;
-    height: 100vh;
+    height: 100dvh;
     width: 280px;
     transform: translateX(-100%);
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -452,6 +458,7 @@ textarea:focus {
     background: white;
     border-bottom: 1px solid var(--border);
     -webkit-overflow-scrolling: touch;
+    flex-shrink: 0;
   }
   .top-nav .nav-item {
     color: var(--text-muted);
@@ -506,39 +513,44 @@ textarea:focus {
   .main-content { 
     flex: 1; 
     width: 100%;
-    overflow-x: hidden;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
   /* Chat view optimizations */
   .chat-container { 
     max-width: 100%; 
     margin: 0; 
-    height: calc(100vh - 56px);
+    flex: 1;
+    height: auto;
     display: flex;
     flex-direction: column;
-    padding-bottom: 0; /* No extra padding needed, input-area handles it */
+    padding-bottom: 0; 
+    background: #fcfcfc;
   }
   
   .chat-history { 
     flex: 1;
-    padding: 1rem 0.875rem;
+    padding: 1rem;
     gap: 1rem;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
   
   .welcome-box { 
-    padding: 0 0.875rem; 
-    margin: 1rem 0.875rem 0 0.875rem;
+    padding: 0 1rem; 
+    margin: 1rem 0;
   }
   
   .message {
-    max-width: 90%;
+    max-width: 92%;
   }
   
   .msg-bubble {
     padding: 0.875rem 1rem;
     font-size: 0.95rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
   }
   
   /* Results grid - stack on mobile */
@@ -548,15 +560,17 @@ textarea:focus {
   }
   
   .result-card {
-    padding: 0.875rem;
+    padding: 1rem;
+    border-left: 3px solid var(--primary);
   }
 
   .input-area { 
-    padding: 1rem; 
+    padding: 0.75rem 1rem; 
     gap: 0.75rem;
     background: white;
     border-top: 1px solid var(--border);
     flex-shrink: 0;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
   }
   
   textarea { 
@@ -572,11 +586,11 @@ textarea:focus {
     white-space: nowrap;
   }
 
-  /* Admin panel mobile optimizations */
+  /* Admin panel mobile optimizations - Cards Layout */
   .admin-container { 
     padding: 1rem;
     width: 100%;
-    overflow-x: hidden;
+    overflow-y: auto;
   }
   
   .panel-header {
@@ -596,6 +610,10 @@ textarea:focus {
     gap: 0.5rem;
     width: 100%;
   }
+  .panel-header div button {
+    flex: 1;
+    justify-content: center;
+  }
   
   .panel { 
     padding: 1rem;
@@ -603,62 +621,69 @@ textarea:focus {
     margin-bottom: 1.5rem;
   }
   
-  .panel h3 {
-    font-size: 1.1rem;
-  }
-  
   .drop-zone {
-    padding: 2.5rem 1rem;
+    padding: 2rem 1rem;
   }
   
-  /* Make table scrollable on mobile */
+  /* Mobile Cards for Documents Table */
   .doc-table {
     display: block;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    white-space: nowrap;
+    border: none;
   }
+  .doc-table thead { display: none; }
+  .doc-table tbody { display: block; }
   
-  .doc-table thead,
-  .doc-table tbody,
   .doc-table tr {
-    display: table;
-    width: 100%;
-    table-layout: fixed;
-  }
-  
-  .doc-table th,
-  .doc-table td {
-    padding: 0.75rem 0.5rem;
-    font-size: 0.85rem;
-  }
-  
-  .doc-table th:first-child,
-  .doc-table td:first-child {
-    padding-left: 0.75rem;
-  }
-  
-  .doc-table th:last-child,
-  .doc-table td:last-child {
-    padding-right: 0.75rem;
-  }
-  
-  /* Stack action buttons vertically if needed */
-  .doc-table td:last-child {
     display: flex;
-    gap: 0.25rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    margin-bottom: 1rem;
+    padding: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  
+  .doc-table td {
+    padding: 0.25rem 0;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.9rem;
+  }
+  
+  /* First cell (Filename) as Header */
+  .doc-table td:first-child {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    display: block;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+    padding-left: 0;
+  }
+  
+  /* Last cell (Actions) at bottom */
+  .doc-table td:last-child {
+    margin-top: 0.75rem;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+    padding-right: 0;
   }
   
   .btn-sm {
-    padding: 0.375rem 0.5rem;
-    font-size: 0.8rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.85rem;
   }
 
   /* Modal adjustments for mobile */
   .modal-panel {
     width: 95%;
-    max-height: 90vh;
+    max-height: 90dvh;
     margin: 0 0.5rem;
   }
   
