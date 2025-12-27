@@ -10,7 +10,7 @@ load_dotenv()
 
 class Settings:
     def __init__(self):
-        self.demo = os.getenv('DEMO', 'false').lower() in ('1', 'true', 'yes')
+        self.demo = os.getenv('DEMO', 'true').lower() in ('1', 'true', 'yes')
         self.qdrant_url = os.getenv('QDRANT_URL') or None
         self.qdrant_path = os.getenv('QDRANT_PATH') or os.path.join(os.path.dirname(__file__), '..', '..', 'local_qdrant_db')
         self.qdrant_api_key = os.getenv('QDRANT_API_KEY') or None
@@ -19,7 +19,7 @@ class Settings:
         self.qdrant_force_recreate = os.getenv('QDRANT_FORCE_RECREATE', 'false').lower() in ('1', 'true', 'yes')
         # Default to sentence-transformers for higher semantic quality; fallback to fastembed if unavailable
         self.embedding_provider = os.getenv('EMBEDDING_PROVIDER', 'sentence')
-        self.embedding_dim = int(os.getenv('EMBEDDING_DIM', '384'))
+        self.embedding_dim = int(os.getenv('EMBEDDING_DIM', '3072'))
         # Maximum seconds to wait for embedding provider operations (init/encode)
         self.embedding_timeout = int(os.getenv('EMBEDDING_TIMEOUT', '10'))
         
