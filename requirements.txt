@@ -13,6 +13,8 @@ openai==1.107.1
 # Qdrant vector database (async support)
 qdrant-client==1.15.1
 
+python-dotenv==1.0.1
+
 # For API testing (valgfri)
 requests==2.32.5
 
