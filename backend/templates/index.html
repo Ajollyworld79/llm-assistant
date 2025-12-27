@@ -202,8 +202,10 @@
             
             if (view === 'admin') refreshDocs();
             
-            // Close mobile sidebar after navigation to reveal content
-            if (window.innerWidth <= 720) closeSidebar();
+            // Always close mobile sidebar after navigation to reveal content
+            if (window.innerWidth <= 768) {
+                closeSidebar();
+            }
         }
 
         async function checkHealth() {
@@ -631,23 +633,47 @@
             const sb = document.querySelector('.sidebar');
             const backdrop = document.querySelector('.sidebar-backdrop');
             if (!sb) return;
-            sb.classList.toggle('open');
-            backdrop && backdrop.classList.toggle('show');
+            const isOpen = sb.classList.contains('open');
+            
+            if (isOpen) {
+                sb.classList.remove('open');
+                backdrop && backdrop.classList.remove('show');
+            } else {
+                sb.classList.add('open');
+                backdrop && backdrop.classList.add('show');
+                // Prevent body scroll when sidebar is open on mobile
+                if (window.innerWidth <= 768) {
+                    document.body.style.overflow = 'hidden';
+                }
+            }
         }
+        
         function closeSidebar() {
             const sb = document.querySelector('.sidebar');
             const backdrop = document.querySelector('.sidebar-backdrop');
             if (!sb) return;
             sb.classList.remove('open');
             backdrop && backdrop.classList.remove('show');
+            // Re-enable body scroll
+            document.body.style.overflow = '';
         }
+        
         // Close sidebar when clicking backdrop
-        document.addEventListener('click', (e) => {
-            const backdrop = document.querySelector('.sidebar-backdrop');
-            if (backdrop && backdrop.classList.contains('show') && e.target === backdrop) closeSidebar();
-        });
+        document.querySelector('.sidebar-backdrop')?.addEventListener('click', closeSidebar);
+        
         // Ensure sidebar is closed when resizing to desktop
-        window.addEventListener('resize', () => { if (window.innerWidth > 720) closeSidebar(); });
+        window.addEventListener('resize', () => { 
+            if (window.innerWidth > 768) {
+                closeSidebar();
+            }
+        });
+        
+        // Close sidebar on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && window.innerWidth <= 768) {
+                closeSidebar();
+            }
+        });
 
         function saveToken() {
             const t = document.getElementById('token-input').value.trim();

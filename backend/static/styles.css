@@ -418,7 +418,7 @@ textarea:focus {
   pointer-events: none; /* avoid capturing clicks */
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   /* Off-canvas sidebar: hidden by default, toggled via .open */
   .app-container { flex-direction: column; height: auto; min-height: 100vh; overflow: visible; }
 
@@ -427,9 +427,9 @@ textarea:focus {
     top: 0;
     left: 0;
     height: 100vh;
-    width: 260px;
+    width: 280px;
     transform: translateX(-100%);
-    transition: transform 0.25s ease;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     z-index: 80;
     background: var(--bg-dark);
     padding: 1.5rem 1rem;
@@ -437,6 +437,7 @@ textarea:focus {
     flex-direction: column;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.15);
   }
   .sidebar.open { transform: translateX(0); }
 
@@ -444,39 +445,232 @@ textarea:focus {
   .top-nav {
     display: flex;
     gap: 0.5rem;
-    padding: 0.5rem 0.75rem 0.5rem 56px; /* leave space for toggle */
+    padding: 0.75rem 0.75rem 0.75rem 60px;
     align-items: center;
     overflow-x: auto;
     white-space: nowrap;
-    background: transparent;
+    background: white;
+    border-bottom: 1px solid var(--border);
+    -webkit-overflow-scrolling: touch;
+  }
+  .top-nav .nav-item {
+    color: var(--text-muted);
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .top-nav .nav-item.active {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
   }
 
   .sidebar nav { display: block; }
-  .brand { margin-bottom: 1rem; }
+  .brand { margin-bottom: 1.5rem; font-size: 1.15rem; }
 
-  .menu-toggle { display: inline-flex; align-items: center; justify-content: center; position: fixed; left: 12px; top: 12px; z-index: 90; width: 40px; height: 40px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(2,6,23,0.12); border: none; }
-  .menu-toggle svg { width: 20px; height: 20px; color: var(--text-main); }
+  .menu-toggle { 
+    display: inline-flex; 
+    align-items: center; 
+    justify-content: center; 
+    position: fixed; 
+    left: 12px; 
+    top: 12px; 
+    z-index: 90; 
+    width: 44px; 
+    height: 44px; 
+    background: white; 
+    border-radius: 10px; 
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15); 
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .menu-toggle:active { transform: scale(0.95); }
+  .menu-toggle svg { width: 22px; height: 22px; color: var(--text-main); }
 
-  .sidebar-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 70; }
+  .sidebar-backdrop { 
+    display: none; 
+    position: fixed; 
+    inset: 0; 
+    background: rgba(0,0,0,0.5); 
+    z-index: 70;
+    backdrop-filter: blur(2px);
+    transition: opacity 0.3s;
+  }
   .sidebar-backdrop.show { display: block; }
 
-  .main-content { flex: 1; padding-top: 56px; }
+  .main-content { 
+    flex: 1; 
+    width: 100%;
+    overflow-x: hidden;
+  }
 
-  /* Chat sizing and spacing adjustments */
-  .chat-container { max-width: 100%; margin: 0; padding: 0 0.5rem 0.5rem 0.5rem; }
-  .chat-history { padding: 0.75rem 0.75rem 1rem 0.75rem; gap: 0.85rem; }
-  .welcome-box { padding: 0 0.5rem; margin-top: 0.6rem; }
+  /* Chat view optimizations */
+  .chat-container { 
+    max-width: 100%; 
+    margin: 0; 
+    height: calc(100vh - 56px);
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 0; /* No extra padding needed, input-area handles it */
+  }
+  
+  .chat-history { 
+    flex: 1;
+    padding: 1rem 0.875rem;
+    gap: 1rem;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .welcome-box { 
+    padding: 0 0.875rem; 
+    margin: 1rem 0.875rem 0 0.875rem;
+  }
+  
+  .message {
+    max-width: 90%;
+  }
+  
+  .msg-bubble {
+    padding: 0.875rem 1rem;
+    font-size: 0.95rem;
+  }
+  
+  /* Results grid - stack on mobile */
+  .results-grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+  
+  .result-card {
+    padding: 0.875rem;
+  }
 
-  .input-area { padding: 0.75rem 0.75rem; gap: 0.5rem; align-items: center; }
-  textarea { height: 48px; padding: 0.75rem; font-size: 0.95rem; }
-  .btn { padding: 0.5rem 0.75rem; font-size: 0.85rem; }
+  .input-area { 
+    padding: 1rem; 
+    gap: 0.75rem;
+    background: white;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  
+  textarea { 
+    height: 44px; 
+    padding: 0.75rem; 
+    font-size: 1rem;
+    border-radius: 12px;
+  }
+  
+  .btn { 
+    padding: 0.625rem 1rem; 
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
 
-  /* Reduce admin panel padding on small screens */
-  .admin-container { padding: 1.25rem; }
-  .panel { padding: 1rem; }
+  /* Admin panel mobile optimizations */
+  .admin-container { 
+    padding: 1rem;
+    width: 100%;
+    overflow-x: hidden;
+  }
+  
+  .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  
+  .panel-header h2 {
+    font-size: 1.25rem;
+  }
+  
+  .panel-header div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    width: 100%;
+  }
+  
+  .panel { 
+    padding: 1rem;
+    border-radius: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+  
+  .panel h3 {
+    font-size: 1.1rem;
+  }
+  
+  .drop-zone {
+    padding: 2.5rem 1rem;
+  }
+  
+  /* Make table scrollable on mobile */
+  .doc-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+  
+  .doc-table thead,
+  .doc-table tbody,
+  .doc-table tr {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+  }
+  
+  .doc-table th,
+  .doc-table td {
+    padding: 0.75rem 0.5rem;
+    font-size: 0.85rem;
+  }
+  
+  .doc-table th:first-child,
+  .doc-table td:first-child {
+    padding-left: 0.75rem;
+  }
+  
+  .doc-table th:last-child,
+  .doc-table td:last-child {
+    padding-right: 0.75rem;
+  }
+  
+  /* Stack action buttons vertically if needed */
+  .doc-table td:last-child {
+    display: flex;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+  }
+  
+  .btn-sm {
+    padding: 0.375rem 0.5rem;
+    font-size: 0.8rem;
+  }
 
-  /* Ensure corner credits don't overlap important UI */
-  .corner-credits { left: 12px; right: 12px; border-radius: 6px; font-size: 0.8rem; bottom: 12px; }
+  /* Modal adjustments for mobile */
+  .modal-panel {
+    width: 95%;
+    max-height: 90vh;
+    margin: 0 0.5rem;
+  }
+  
+  .modal-body {
+    font-size: 0.8rem;
+    padding: 1rem;
+  }
+
+  /* Hide credits on mobile to avoid overlap with input */
+  .corner-credits { 
+    display: none;
+  }
 }
 
 .modal-backdrop.open .modal-panel { transform: scale(1); }
