@@ -21,12 +21,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 
 # Copy local Qdrant database (persistent storage)
-COPY local_qdrant_db/ ./local_qdrant_db/
+COPY local_qdrant_db/ ./qdrant_data/
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8002
-ENV QDRANT_PATH=/app/local_qdrant_db
+ENV QDRANT_PATH=/app/qdrant_data
 ENV DEMO=false
 
 # Expose port (Railway will override with $PORT)
