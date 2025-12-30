@@ -3,13 +3,10 @@
 import gc
 import asyncio
 import logging
-import os
 import sys
 import time
 import weakref
-from collections import defaultdict
-from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # Setup logging
 try:

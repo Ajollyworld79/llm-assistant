@@ -11,7 +11,6 @@ from typing import List
 import asyncio
 import logging
 import os
-import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
 
 # Avoid tokenizers parallelism warning/deadlock when process is forked (e.g., gunicorn)

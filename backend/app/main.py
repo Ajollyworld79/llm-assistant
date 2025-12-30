@@ -10,25 +10,23 @@
 - Search using cosine similarity
 - Demo-mode flag and simulated latency
 """
-from quart import Quart, request, jsonify, Response, render_template, send_from_directory
+from quart import Quart, request, jsonify, render_template
 from quart_cors import cors
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional, Tuple, cast
+from typing import Dict, Any, Optional, cast
 import uuid
 import time
 import asyncio
-import importlib
 import random
 import logging
 import datetime   
 import inspect             
-import gc
 from functools import wraps
 import re
 
 try:
     from .config import settings
-    from . import embeddings
+    import embeddings as embeddings
     from .module.middleware import setup_middleware
     from .module.lifecycle import lifecycle
     from .module.apimonitor import monitor
