@@ -847,6 +847,12 @@ async def search():
 
 @app.route('/optimize', methods=['POST'])
 async def optimize_store():
+    """Optimize Qdrant collection.
+
+    Requires admin token when configured. Triggers collection optimization in Qdrant
+    unless running in demo mode or Qdrant client is unavailable. Returns JSON with
+    operation result or error details.
+    """
     # Admin auth required
     if settings.admin_token:
         auth = request.headers.get('Authorization', '')
@@ -869,6 +875,12 @@ async def optimize_store():
 
 @app.route('/reset', methods=['POST'])
 async def reset_store():
+    """Reset in-memory documents and clear Qdrant collection.
+
+    Requires admin token when configured. Clears the in-memory `DOCUMENTS` list and,
+    if a Qdrant client is connected and not in demo mode, attempts to clear the configured
+    collection and returns deletion details.
+    """
     # Admin auth required
     if settings.admin_token:
         auth = request.headers.get('Authorization', '')
