@@ -41,6 +41,35 @@
 }
 .connection-banner span { padding: 0.2rem 0.5rem; background: #0f172a; border-radius: 0.3rem; }
 
+/* Top tabs */
+.bk-tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 1rem;
+    border-bottom: 1px solid #334155;
+    flex-wrap: wrap;
+}
+.bk-tab {
+    background: transparent;
+    color: #94a3b8;
+    border: none;
+    padding: 0.7rem 1.2rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+}
+.bk-tab:hover { color: white; }
+.bk-tab.active {
+    color: white;
+    border-bottom-color: #3b82f6;
+}
+
+.bk-tab-panel { display: block; }
+.bk-tab-panel[hidden] { display: none; }
+.bk-subheading { font-size: 0.95rem; font-weight: 600; color: #f1f5f9; margin: 1.5rem 0 0.8rem; }
+
 .backend-main { padding: 2rem; max-width: 1300px; margin: 0 auto; }
 
 .bk-section { margin-bottom: 3rem; }
@@ -257,9 +286,18 @@
     border: 1px solid #334155;
     border-radius: 0.5rem;
     padding: 1rem;
-    min-height: 220px;
+    display: flex;
+    flex-direction: column;
 }
 .chart-card h4 { margin: 0 0 0.6rem; font-size: 0.85rem; color: #cbd5e1; }
+.chart-card canvas {
+    /* Chart.js with maintainAspectRatio=false needs a sized parent */
+    max-height: 220px;
+}
+.chart-canvas-wrap {
+    position: relative;
+    height: 220px;
+}
 
 @media (max-width: 900px) {
     .playground-grid, .model-dropdowns, .flow-and-gdpr { grid-template-columns: 1fr; }

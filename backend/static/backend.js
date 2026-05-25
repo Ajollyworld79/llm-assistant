@@ -1,6 +1,20 @@
 // Backend viewer — polling-based dashboard
 // All endpoints are read-only. No write actions are possible from this page.
 
+// ---------- top tabs ----------
+function setTab(name) {
+    document.querySelectorAll('.bk-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === name);
+    });
+    document.querySelectorAll('.bk-tab-panel').forEach(p => {
+        p.hidden = p.id !== ('tab-' + name);
+    });
+    // Charts redraw correctly only when visible — nudge them when the usage tab opens
+    if (name === 'usage') {
+        Object.values(CHARTS).forEach(c => c && c.resize());
+    }
+}
+
 const SYS_POLL_MS = 30_000;
 const METRICS_POLL_MS = 5_000;
 const CONN_POLL_MS = 5_000;

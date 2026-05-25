@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="da">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,11 +13,11 @@
 
 <div class="backend-header">
     <div class="backend-title">
-        <a href="/" class="backend-home">← Tilbage til chat</a>
+        <a href="/" class="backend-home">← Back to chat</a>
         <h1>Backend Viewer</h1>
     </div>
     {% if locked %}
-    <div class="lock-banner">🔒 LÅST DEMO — alle ændringer deaktiveret. Dette er kun til inspektion.</div>
+    <div class="lock-banner">🔒 LOCKED DEMO — all mutations disabled. Inspection only.</div>
     {% else %}
     <div class="lock-banner lock-banner-unlocked">🔓 UNLOCKED — running in dev mode (BACKEND_DEMO_LOCKED=false).</div>
     {% endif %}
@@ -28,24 +28,31 @@
         <span data-conn="logger">⚪ Logger</span>
         <span data-conn="usage_db">⚪ Usage DB</span>
     </div>
+    <nav class="bk-tabs" role="tablist">
+        <button class="bk-tab active" data-tab="overview" onclick="setTab('overview')">Overview</button>
+        <button class="bk-tab" data-tab="models" onclick="setTab('models')">Models</button>
+        <button class="bk-tab" data-tab="prompt" onclick="setTab('prompt')">Prompt Playground</button>
+        <button class="bk-tab" data-tab="gdpr" onclick="setTab('gdpr')">GDPR &amp; Data Flow</button>
+        <button class="bk-tab" data-tab="usage" onclick="setTab('usage')">Usage History</button>
+    </nav>
 </div>
 
 <main class="backend-main">
 
-<!-- ====== SECTION 1: settings + connection tiles ====== -->
-<section class="bk-section">
-    <h2>Settings &amp; status</h2>
-    <div class="tile-grid" id="tile-grid">
+<!-- ====== TAB: OVERVIEW ====== -->
+<section class="bk-tab-panel active" id="tab-overview">
+    <h2>System &amp; status</h2>
+    <div class="tile-grid">
         <div class="tile">
-            <div class="tile-label">Primær model</div>
+            <div class="tile-label">Primary model</div>
             <div class="tile-value" id="tile-primary-model">—</div>
-            <div class="tile-sub">Cache-hit: <span id="tile-cache-ratio">—</span></div>
+            <div class="tile-sub">Cache hit: <span id="tile-cache-ratio">—</span></div>
             <div class="tile-dot" id="tile-primary-dot"></div>
         </div>
         <div class="tile">
             <div class="tile-label">Fallback model</div>
             <div class="tile-value" id="tile-fallback-model">—</div>
-            <div class="tile-sub">Aktiveret: <span id="tile-fallback-count">0</span> gange</div>
+            <div class="tile-sub">Triggered: <span id="tile-fallback-count">0</span> times</div>
             <div class="tile-dot" id="tile-fallback-dot"></div>
         </div>
         <div class="tile">
@@ -73,9 +80,9 @@
             <div class="tile-dot tile-dot-green"></div>
         </div>
         <div class="tile">
-            <div class="tile-label">Token budget i dag</div>
+            <div class="tile-label">Token budget today</div>
             <div class="tile-value" id="tile-tokens-used">— / —</div>
-            <div class="tile-sub">Reset <span id="tile-budget-reset">—</span></div>
+            <div class="tile-sub">Resets <span id="tile-budget-reset">—</span></div>
             <div class="tile-dot" id="tile-budget-dot"></div>
         </div>
         <div class="tile">
@@ -92,20 +99,40 @@
         </div>
     </div>
 
+    <h3 class="bk-subheading">Live metrics</h3>
+    <div class="metrics-grid">
+        <div class="metric-big">
+            <div class="metric-label">Memory</div>
+            <div class="metric-value"><span id="m-memory">—</span> <small>MB</small></div>
+        </div>
+        <div class="metric-big">
+            <div class="metric-label">Avg latency</div>
+            <div class="metric-value"><span id="m-latency">—</span> <small>ms</small></div>
+        </div>
+        <div class="metric-big">
+            <div class="metric-label">Cache hit (session)</div>
+            <div class="metric-value"><span id="m-cache">—</span> <small>%</small></div>
+        </div>
+        <div class="metric-big">
+            <div class="metric-label">Requests total</div>
+            <div class="metric-value"><span id="m-requests">—</span></div>
+        </div>
+    </div>
+
     <details class="config-dump">
-        <summary>Vis hele config (sanitized)</summary>
+        <summary>Show full config (sanitized)</summary>
         <pre id="config-pre">loading…</pre>
     </details>
 </section>
 
-<!-- ====== SECTION 2: models dropdown (disabled) ====== -->
-<section class="bk-section">
-    <h2>Modeller</h2>
-    <p class="bk-help">Vis tilgængelige modeller. Skift er deaktiveret i demo.</p>
+<!-- ====== TAB: MODELS ====== -->
+<section class="bk-tab-panel" id="tab-models" hidden>
+    <h2>Models</h2>
+    <p class="bk-help">Browse available models. Switching is disabled in the demo.</p>
     <div class="model-dropdowns">
         <div class="model-dropdown" id="model-dropdown-primary">
             <button class="model-toggle" onclick="toggleDropdown('primary')">
-                <span class="model-role">PRIMÆR</span>
+                <span class="model-role">PRIMARY</span>
                 <span class="model-active" id="dd-primary-active">—</span>
                 <span class="model-chevron">▾</span>
             </button>
@@ -120,58 +147,39 @@
             <div class="model-list" id="dd-fallback-list" hidden></div>
         </div>
     </div>
-    <button class="model-apply" disabled title="Disabled i demo — kontakt os for at konfigurere skift">Anvend skift</button>
+    <button class="model-apply" disabled title="Disabled in demo — contact us to configure model switching">Apply change</button>
 </section>
 
-<!-- ====== SECTION 3: prompt playground (disabled chat) ====== -->
-<section class="bk-section">
-    <h2>Prompt playground</h2>
-    <p class="bk-help">Inspicér den aktuelle system-prompt og forhåndsvis hvad der ville blive sendt til modellen. Ændringer her gemmes ikke server-side.</p>
+<!-- ====== TAB: PROMPT PLAYGROUND ====== -->
+<section class="bk-tab-panel" id="tab-prompt" hidden>
+    <h2>Prompt Playground</h2>
+    <p class="bk-help">Inspect the current system prompt and preview what would be sent to the model. Changes here are not persisted server-side.</p>
     <div class="playground-grid">
         <div>
             <label class="bk-label">System prompt</label>
             <textarea id="prompt-system" class="prompt-area" spellcheck="false"></textarea>
             <div class="playground-actions">
                 <input type="file" id="prompt-import" accept=".txt,.md" hidden onchange="importPrompt(event)">
-                <button onclick="document.getElementById('prompt-import').click()">Importer .txt</button>
-                <button onclick="exportPrompt()">Eksporter .txt</button>
-                <button onclick="updatePreview()">Opdater preview</button>
+                <button onclick="document.getElementById('prompt-import').click()">Import .txt</button>
+                <button onclick="exportPrompt()">Export .txt</button>
+                <button onclick="updatePreview()">Refresh preview</button>
             </div>
         </div>
         <div>
-            <label class="bk-label">Faktisk request (preview)</label>
+            <label class="bk-label">Outgoing request preview</label>
             <pre id="prompt-preview" class="prompt-preview">loading…</pre>
-            <button class="playground-send" disabled title="Disabled i demo — brug chat-siden for at teste">Send til model</button>
-            <div class="playground-note">Lokal preview. Server-side prompt ændres ikke.</div>
+            <button class="playground-send" disabled title="Disabled in demo — use the chat page to test">Send to model</button>
+            <div class="playground-note">Local preview only. Server-side prompt unchanged.</div>
         </div>
     </div>
 </section>
 
-<!-- ====== SECTION 4: live metrics + GDPR + flow ====== -->
-<section class="bk-section">
-    <h2>Live metrics &amp; GDPR</h2>
-    <div class="metrics-grid">
-        <div class="metric-big">
-            <div class="metric-label">Memory</div>
-            <div class="metric-value"><span id="m-memory">—</span> <small>MB</small></div>
-        </div>
-        <div class="metric-big">
-            <div class="metric-label">Avg latency</div>
-            <div class="metric-value"><span id="m-latency">—</span> <small>ms</small></div>
-        </div>
-        <div class="metric-big">
-            <div class="metric-label">Cache-hit (session)</div>
-            <div class="metric-value"><span id="m-cache">—</span> <small>%</small></div>
-        </div>
-        <div class="metric-big">
-            <div class="metric-label">Requests total</div>
-            <div class="metric-value"><span id="m-requests">—</span></div>
-        </div>
-    </div>
-
+<!-- ====== TAB: GDPR & DATA FLOW ====== -->
+<section class="bk-tab-panel" id="tab-gdpr" hidden>
+    <h2>GDPR &amp; Data Flow</h2>
     <div class="flow-and-gdpr">
         <div class="flow-card">
-            <h3>Data-flow</h3>
+            <h3>Data flow</h3>
             <div class="flow-row">
                 <div class="flow-step"><div class="flow-icon">🖥️</div><div class="flow-label">Browser</div></div>
                 <div class="flow-arrow">→</div>
@@ -183,28 +191,28 @@
             </div>
         </div>
         <div class="gdpr-card">
-            <h3>GDPR-status</h3>
+            <h3>Policy status</h3>
             <table class="gdpr-table">
-                <tr><td>Document TTL</td><td id="g-ttl">— dage</td></tr>
-                <tr><td>Log retention</td><td id="g-logttl">— dage</td></tr>
+                <tr><td>Document TTL</td><td id="g-ttl">— days</td></tr>
+                <tr><td>Log retention</td><td id="g-logttl">— days</td></tr>
                 <tr><td>Encryption at rest</td><td id="g-enc">—</td></tr>
                 <tr><td>Azure abuse opt-out</td><td id="g-abuse">—</td></tr>
-                <tr><td>Næste cleanup</td><td id="g-next">—</td></tr>
+                <tr><td>Next cleanup</td><td id="g-next">—</td></tr>
             </table>
         </div>
     </div>
 </section>
 
-<!-- ====== SECTION 5: usage history (charts) ====== -->
-<section class="bk-section">
-    <h2>Brugshistorik</h2>
-    <p class="bk-help">Historik fra <span id="usage-backend">—</span>. Opdateres hvert 30. sekund.</p>
+<!-- ====== TAB: USAGE HISTORY ====== -->
+<section class="bk-tab-panel" id="tab-usage" hidden>
+    <h2>Usage History</h2>
+    <p class="bk-help">Backend: <span id="usage-backend">—</span>. Refreshes every 30 seconds.</p>
     <div class="usage-summary" id="usage-summary">loading…</div>
     <div class="chart-grid">
-        <div class="chart-card"><h4>Requests / time (24t)</h4><canvas id="chart-requests"></canvas></div>
-        <div class="chart-card"><h4>Tokens / time (24t)</h4><canvas id="chart-tokens"></canvas></div>
-        <div class="chart-card"><h4>Cache-hit % (7d)</h4><canvas id="chart-cache"></canvas></div>
-        <div class="chart-card"><h4>Fallback-rate % (7d)</h4><canvas id="chart-fallback"></canvas></div>
+        <div class="chart-card"><h4>Requests / hour (24h)</h4><div class="chart-canvas-wrap"><canvas id="chart-requests"></canvas></div></div>
+        <div class="chart-card"><h4>Tokens / hour (24h)</h4><div class="chart-canvas-wrap"><canvas id="chart-tokens"></canvas></div></div>
+        <div class="chart-card"><h4>Cache hit % (7d)</h4><div class="chart-canvas-wrap"><canvas id="chart-cache"></canvas></div></div>
+        <div class="chart-card"><h4>Fallback rate % (7d)</h4><div class="chart-canvas-wrap"><canvas id="chart-fallback"></canvas></div></div>
     </div>
 </section>
 
