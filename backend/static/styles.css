@@ -849,6 +849,8 @@ textarea:focus {
     justify-content: center;
     z-index: 1000;
 }
+.consent-modal[hidden] { display: none; }
+.flow-diagram[hidden] { display: none; }
 .consent-card {
     background: white;
     max-width: 500px;

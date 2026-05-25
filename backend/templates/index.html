@@ -761,7 +761,11 @@
             }
         }
 
-        showConsentIfFirstVisit();
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', showConsentIfFirstVisit);
+        } else {
+            showConsentIfFirstVisit();
+        }
     </script>
 
     <div id="consent-modal" class="consent-modal" hidden>

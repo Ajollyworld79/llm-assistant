@@ -154,6 +154,29 @@ class AIManager:
         except Exception as e:
             logger.debug("Failed to record cache stats: %s", e)
 
+        # Log usage event to history DB for /backend graphs
+        try:
+            try:
+                from backend.app.module.usage_db import usage_db
+            except ImportError:
+                from module.usage_db import usage_db
+            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            is_fallback = (model_used == getattr(self.settings, "azure_deployment_chat_fallback", ""))
+            usage_db.log_event(
+                session_id=None,  # filled by caller if available
+                endpoint="/search",
+                model=model_used,
+                tokens_input=prompt_tokens,
+                tokens_output=completion_tokens,
+                tokens_cached=self.last_cached_tokens,
+                latency_ms=0,
+                status_code=200,
+                error_kind="fallback" if is_fallback else None,
+            )
+        except Exception as e:
+            logger.debug("Failed to log usage event: %s", e)
+
     async def ask_agent_with_context(self, query: str, context: str,
                                      conversation_history: Optional[list] = None) -> Tuple[str, Optional[int]]:
         if conversation_history is None:

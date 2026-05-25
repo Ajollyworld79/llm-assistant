@@ -31,5 +31,8 @@ pycryptodome==3.23.0
 python-dotenv==1.0.1
 pydantic
 
+# Postgres for usage history (PR 3) — Railway provides DATABASE_URL automatically
+asyncpg==0.30.0
+
 # Dev
 pytest==8.3.3

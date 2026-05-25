@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backend Viewer — LLM Assistant</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/backend.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="backend-body">
+
+<div class="backend-header">
+    <div class="backend-title">
+        <a href="/" class="backend-home">← Tilbage til chat</a>
+        <h1>Backend Viewer</h1>
+    </div>
+    {% if locked %}
+    <div class="lock-banner">🔒 LÅST DEMO — alle ændringer deaktiveret. Dette er kun til inspektion.</div>
+    {% else %}
+    <div class="lock-banner lock-banner-unlocked">🔓 UNLOCKED — running in dev mode (BACKEND_DEMO_LOCKED=false).</div>
+    {% endif %}
+    <div id="connection-banner" class="connection-banner">
+        <span data-conn="qdrant">⚪ Qdrant</span>
+        <span data-conn="azure_openai">⚪ Azure OpenAI</span>
+        <span data-conn="embedding_model">⚪ Embedding</span>
+        <span data-conn="logger">⚪ Logger</span>
+        <span data-conn="usage_db">⚪ Usage DB</span>
+    </div>
+</div>
+
+<main class="backend-main">
+
+<!-- ====== SECTION 1: settings + connection tiles ====== -->
+<section class="bk-section">
+    <h2>Settings &amp; status</h2>
+    <div class="tile-grid" id="tile-grid">
+        <div class="tile">
+            <div class="tile-label">Primær model</div>
+            <div class="tile-value" id="tile-primary-model">—</div>
+            <div class="tile-sub">Cache-hit: <span id="tile-cache-ratio">—</span></div>
+            <div class="tile-dot" id="tile-primary-dot"></div>
+        </div>
+        <div class="tile">
+            <div class="tile-label">Fallback model</div>
+            <div class="tile-value" id="tile-fallback-model">—</div>
+            <div class="tile-sub">Aktiveret: <span id="tile-fallback-count">0</span> gange</div>
+            <div class="tile-dot" id="tile-fallback-dot"></div>
+        </div>
+        <div class="tile">
+            <div class="tile-label">Embedding model</div>
+            <div class="tile-value" id="tile-embed-model">—</div>
+            <div class="tile-sub" id="tile-embed-dim">— dim</div>
+            <div class="tile-dot" id="tile-embed-dot"></div>
+        </div>
+        <div class="tile">
+            <div class="tile-label">Vector store</div>
+            <div class="tile-value">Qdrant local</div>
+            <div class="tile-sub"><span id="tile-qdrant-points">—</span> points</div>
+            <div class="tile-dot" id="tile-qdrant-dot"></div>
+        </div>
+        <div class="tile">
+            <div class="tile-label">Region</div>
+            <div class="tile-value" id="tile-region">—</div>
+            <div class="tile-sub">EU residency</div>
+            <div class="tile-dot tile-dot-green"></div>
+        </div>
+        <div class="tile">
+            <div class="tile-label">Deploy</div>
+            <div class="tile-value" id="tile-git-sha">—</div>
+            <div class="tile-sub" id="tile-uptime">—</div>
+            <div class="tile-dot tile-dot-green"></div>
+        </div>
+        <div class="tile">
+            <div class="tile-label">Token budget i dag</div>
+            <div class="tile-value" id="tile-tokens-used">— / —</div>
+            <div class="tile-sub">Reset <span id="tile-budget-reset">—</span></div>
+            <div class="tile-dot" id="tile-budget-dot"></div>
+        </div>
+        <div class="tile">
+            <div class="tile-label">Retention</div>
+            <div class="tile-value" id="tile-retention">—</div>
+            <div class="tile-sub" id="tile-retention-logs">—</div>
+            <div class="tile-dot tile-dot-green"></div>
+        </div>
+        <div class="tile">
+            <div class="tile-label">Encryption (at rest)</div>
+            <div class="tile-value" id="tile-encryption">—</div>
+            <div class="tile-sub">AES-256-GCM</div>
+            <div class="tile-dot" id="tile-encryption-dot"></div>
+        </div>
+    </div>
+
+    <details class="config-dump">
+        <summary>Vis hele config (sanitized)</summary>
+        <pre id="config-pre">loading…</pre>
+    </details>
+</section>
+
+<!-- ====== SECTION 2: models dropdown (disabled) ====== -->
+<section class="bk-section">
+    <h2>Modeller</h2>
+    <p class="bk-help">Vis tilgængelige modeller. Skift er deaktiveret i demo.</p>
+    <div class="model-dropdowns">
+        <div class="model-dropdown" id="model-dropdown-primary">
+            <button class="model-toggle" onclick="toggleDropdown('primary')">
+                <span class="model-role">PRIMÆR</span>
+                <span class="model-active" id="dd-primary-active">—</span>
+                <span class="model-chevron">▾</span>
+            </button>
+            <div class="model-list" id="dd-primary-list" hidden></div>
+        </div>
+        <div class="model-dropdown" id="model-dropdown-fallback">
+            <button class="model-toggle" onclick="toggleDropdown('fallback')">
+                <span class="model-role">FALLBACK</span>
+                <span class="model-active" id="dd-fallback-active">—</span>
+                <span class="model-chevron">▾</span>
+            </button>
+            <div class="model-list" id="dd-fallback-list" hidden></div>
+        </div>
+    </div>
+    <button class="model-apply" disabled title="Disabled i demo — kontakt os for at konfigurere skift">Anvend skift</button>
+</section>
+
+<!-- ====== SECTION 3: prompt playground (disabled chat) ====== -->
+<section class="bk-section">
+    <h2>Prompt playground</h2>
+    <p class="bk-help">Inspicér den aktuelle system-prompt og forhåndsvis hvad der ville blive sendt til modellen. Ændringer her gemmes ikke server-side.</p>
+    <div class="playground-grid">
+        <div>
+            <label class="bk-label">System prompt</label>
+            <textarea id="prompt-system" class="prompt-area" spellcheck="false"></textarea>
+            <div class="playground-actions">
+                <input type="file" id="prompt-import" accept=".txt,.md" hidden onchange="importPrompt(event)">
+                <button onclick="document.getElementById('prompt-import').click()">Importer .txt</button>
+                <button onclick="exportPrompt()">Eksporter .txt</button>
+                <button onclick="updatePreview()">Opdater preview</button>
+            </div>
+        </div>
+        <div>
+            <label class="bk-label">Faktisk request (preview)</label>
+            <pre id="prompt-preview" class="prompt-preview">loading…</pre>
+            <button class="playground-send" disabled title="Disabled i demo — brug chat-siden for at teste">Send til model</button>
+            <div class="playground-note">Lokal preview. Server-side prompt ændres ikke.</div>
+        </div>
+    </div>
+</section>
+
+<!-- ====== SECTION 4: live metrics + GDPR + flow ====== -->
+<section class="bk-section">
+    <h2>Live metrics &amp; GDPR</h2>
+    <div class="metrics-grid">
+        <div class="metric-big">
+            <div class="metric-label">Memory</div>
+            <div class="metric-value"><span id="m-memory">—</span> <small>MB</small></div>
+        </div>
+        <div class="metric-big">
+            <div class="metric-label">Avg latency</div>
+            <div class="metric-value"><span id="m-latency">—</span> <small>ms</small></div>
+        </div>
+        <div class="metric-big">
+            <div class="metric-label">Cache-hit (session)</div>
+            <div class="metric-value"><span id="m-cache">—</span> <small>%</small></div>
+        </div>
+        <div class="metric-big">
+            <div class="metric-label">Requests total</div>
+            <div class="metric-value"><span id="m-requests">—</span></div>
+        </div>
+    </div>
+
+    <div class="flow-and-gdpr">
+        <div class="flow-card">
+            <h3>Data-flow</h3>
+            <div class="flow-row">
+                <div class="flow-step"><div class="flow-icon">🖥️</div><div class="flow-label">Browser</div></div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step"><div class="flow-icon">🚂</div><div class="flow-label">Railway<br><small>EU</small></div></div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step"><div class="flow-icon">📦</div><div class="flow-label">Qdrant<br><small>local volume</small></div></div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step"><div class="flow-icon">🤖</div><div class="flow-label">Azure OpenAI<br><small id="flow-region">—</small></div></div>
+            </div>
+        </div>
+        <div class="gdpr-card">
+            <h3>GDPR-status</h3>
+            <table class="gdpr-table">
+                <tr><td>Document TTL</td><td id="g-ttl">— dage</td></tr>
+                <tr><td>Log retention</td><td id="g-logttl">— dage</td></tr>
+                <tr><td>Encryption at rest</td><td id="g-enc">—</td></tr>
+                <tr><td>Azure abuse opt-out</td><td id="g-abuse">—</td></tr>
+                <tr><td>Næste cleanup</td><td id="g-next">—</td></tr>
+            </table>
+        </div>
+    </div>
+</section>
+
+<!-- ====== SECTION 5: usage history (charts) ====== -->
+<section class="bk-section">
+    <h2>Brugshistorik</h2>
+    <p class="bk-help">Historik fra <span id="usage-backend">—</span>. Opdateres hvert 30. sekund.</p>
+    <div class="usage-summary" id="usage-summary">loading…</div>
+    <div class="chart-grid">
+        <div class="chart-card"><h4>Requests / time (24t)</h4><canvas id="chart-requests"></canvas></div>
+        <div class="chart-card"><h4>Tokens / time (24t)</h4><canvas id="chart-tokens"></canvas></div>
+        <div class="chart-card"><h4>Cache-hit % (7d)</h4><canvas id="chart-cache"></canvas></div>
+        <div class="chart-card"><h4>Fallback-rate % (7d)</h4><canvas id="chart-fallback"></canvas></div>
+    </div>
+</section>
+
+</main>
+
+<script src="/static/backend.js"></script>
+</body>
+</html>

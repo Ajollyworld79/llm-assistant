@@ -99,6 +99,13 @@ class LifeCycleManager:
         except Exception as e:
             logger.warning(f'Failed to start RetentionWorker: {e}')
 
+        # Initialize usage history DB (postgres if DATABASE_URL is set, otherwise memory)
+        try:
+            from .usage_db import usage_db
+            await usage_db.initialize()
+        except Exception as e:
+            logger.warning(f'Failed to initialize UsageDB: {e}')
+
     async def shutdown(self):
         """Cleanup resources on application shutdown."""
         logger.info("Shutting down application resources...")
@@ -121,6 +128,13 @@ class LifeCycleManager:
                 await worker.stop()
         except Exception:
             logger.debug('Retention worker shutdown failed')
+
+        # Close usage DB pool
+        try:
+            from .usage_db import usage_db
+            await usage_db.shutdown()
+        except Exception:
+            logger.debug('UsageDB shutdown failed')
 
         # Shutdown FastEmbed process pool if any
         try:

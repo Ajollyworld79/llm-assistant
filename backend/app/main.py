@@ -31,6 +31,7 @@ try:
     from .module.lifecycle import lifecycle
     from .module.apimonitor import monitor
     from .module.crypto import encrypt_text, decrypt_text
+    from .module.demo_lock import reject_if_locked
 except ImportError:
     import os, sys
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,6 +44,7 @@ except ImportError:
     from module.lifecycle import lifecycle
     from module.apimonitor import monitor
     from module.crypto import encrypt_text, decrypt_text
+    from module.demo_lock import reject_if_locked
     # Garbage collection manager (optional psutil dependency)
     try:
         from .module.garbage_collection import gc_manager
@@ -89,17 +91,24 @@ app = cors(app, allow_origin="*")
 # Register Middleware
 setup_middleware(app)
 
-# Register GDPR blueprint (forget/export/audit/policy)
-try:
-    from .routes.gdpr import gdpr_bp
-    app.register_blueprint(gdpr_bp)
-except ImportError:
+# Register GDPR + backend-viewer blueprints
+def _register_blueprints():
+    import logging as _l
+    _log = _l.getLogger(__name__)
     try:
-        from routes.gdpr import gdpr_bp
+        try:
+            from .routes.gdpr import gdpr_bp
+            from .routes.backend_viewer import backend_bp
+        except ImportError:
+            from routes.gdpr import gdpr_bp
+            from routes.backend_viewer import backend_bp
         app.register_blueprint(gdpr_bp)
+        app.register_blueprint(backend_bp)
+        _log.info("Registered blueprints: gdpr, backend_viewer")
     except Exception as _e:
-        import logging as _l
-        _l.getLogger(__name__).warning("Could not register gdpr_bp: %s", _e)
+        _log.warning("Could not register blueprints: %s", _e)
+
+_register_blueprints()
 
 DEMO_BANNER = "Demo mode — results are simulated; no active LLM connection."
 EMBED_DIM = settings.embedding_dim
@@ -373,6 +382,7 @@ async def monitor_stats():
 
 
 @app.route('/upload', methods=['POST'])
+@reject_if_locked
 async def upload_file():
     request_id = monitor.start_request('/upload', 'POST')
     # Accept either multipart file uploads or JSON with 'text' and optional 'filename'
@@ -520,6 +530,7 @@ async def upload_file():
 
 
 @app.route('/admin/collection', methods=['POST'])
+@reject_if_locked
 @auth_manager.require_admin
 async def admin_manage_collection():
     """Admin endpoint to recreate or create a Qdrant collection using current EMBEDDING_DIM."""
@@ -558,6 +569,7 @@ async def admin_manage_collection():
 
 
 @app.route('/admin/reindex_in_memory', methods=['POST'])
+@reject_if_locked
 @auth_manager.require_admin
 async def admin_reindex_in_memory():
     """Upsert all DOCUMENTS currently stored in-memory into the configured collection."""
@@ -626,6 +638,7 @@ async def admin_reindex_in_memory():
 
 
 @app.route('/admin/upload_vectors', methods=['POST'])
+@reject_if_locked
 @auth_manager.require_admin
 async def admin_upload_vectors():
     """Admin endpoint to upload pre-computed vectors in JSON format."""
@@ -868,6 +881,7 @@ async def search():
 
 
 @app.route('/optimize', methods=['POST'])
+@reject_if_locked
 async def optimize_store():
     """Optimize Qdrant collection.
 
@@ -896,6 +910,7 @@ async def optimize_store():
     return jsonify({"status": "optimized"})
 
 @app.route('/reset', methods=['POST'])
+@reject_if_locked
 async def reset_store():
     """Reset in-memory documents and clear Qdrant collection.
 
@@ -929,6 +944,7 @@ async def reset_store():
 
 
 @app.route('/document/<doc_id>', methods=['DELETE'])
+@reject_if_locked
 async def delete_document(doc_id):
     # Admin auth required
     if settings.admin_token:
