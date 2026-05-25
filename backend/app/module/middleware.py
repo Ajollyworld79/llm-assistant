@@ -278,25 +278,82 @@ class EnhancedCleanupMiddleware:
 
 def setup_middleware(app):
     """Register request timing handlers and wrap the ASGI app with EnhancedCleanupMiddleware."""
-    # Attach simple before/after request timing
+    try:
+        from .rate_limiter import get_limiter
+    except ImportError:
+        from backend.app.module.rate_limiter import get_limiter
+
+    # Endpoints subject to rate limiting — anything that costs money or memory
+    rate_limited_paths = ('/search', '/upload')
+
     @app.before_request
     async def before_request():
-        # Attach start time to global request context
+        from quart import request
+        import uuid
         g.start_time = time.time()
+
+        # Stable per-browser session id used for rate limits, point tagging, and GDPR forget/export
+        existing = request.cookies.get('demo_session_id', '')
+        if existing:
+            g.session_id = existing
+            g.session_set_cookie = False
+        else:
+            g.session_id = uuid.uuid4().hex
+            g.session_set_cookie = True
+
+        path = request.path
+        if not any(path.startswith(p) for p in rate_limited_paths):
+            return
+
+        limiter = get_limiter()
+        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+        session_id = g.session_id
+
+        reason = await limiter.check_ip(client_ip)
+        if reason:
+            return jsonify({
+                "error": "rate_limited",
+                "detail": "Demo-loftet er ramt. Kontakt os for fuld adgang.",
+                "limit": reason,
+            }), 429
+
+        reason = await limiter.check_session(session_id)
+        if reason:
+            return jsonify({
+                "error": "rate_limited",
+                "detail": "Demo-loftet er ramt. Kontakt os for fuld adgang.",
+                "limit": reason,
+            }), 429
+
+        reason = await limiter.check_token_budget()
+        if reason:
+            return jsonify({
+                "error": "budget_exhausted",
+                "detail": "Demoens daglige token-budget er opbrugt. Prøv igen i morgen.",
+                "limit": reason,
+            }), 429
 
     @app.after_request
     async def after_request(response: Response):
         from quart import request
+        # Persist the session cookie on first response of a new browser session
+        if getattr(g, 'session_set_cookie', False):
+            response.set_cookie(
+                'demo_session_id',
+                getattr(g, 'session_id', ''),
+                max_age=60 * 60 * 24 * 7,  # 7 days — matches default DOCUMENT_TTL_DAYS
+                httponly=True,
+                samesite='Lax',
+            )
+
         # Check if start_time is set in g
         start_time = getattr(g, 'start_time', None)
         if start_time:
             duration_ms = (time.time() - start_time) * 1000
             status_code = response.status_code
 
-            # Log basic info
             logger.info(f"{request.method} {request.path} {status_code} - {duration_ms:.2f}ms")
 
-            # Record metrics
             is_success = 200 <= status_code < 400
             monitor.record_request(latency_ms=duration_ms, success=is_success)
 

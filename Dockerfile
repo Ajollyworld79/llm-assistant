@@ -1,40 +1,36 @@
-# Use Python 3.11 slim image for smaller size
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    unixodbc-dev \
+# System deps kept minimal — onnxruntime needs libgomp for OpenMP
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Pre-warm fastembed ONNX model into the image (avoids runtime download).
+# Multilingual MiniLM (~120MB) supports Danish via ~50 languages.
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')"
+
 COPY backend/ ./backend/
 
-# Copy local Qdrant database (persistent storage)
+# Persistent Qdrant volume gets seeded from any local data shipped with the repo
 COPY local_qdrant_db/ ./qdrant_data/
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8002
 ENV QDRANT_PATH=/app/qdrant_data
 ENV DEMO=false
+ENV EMBEDDING_PROVIDER=fastembed
+ENV EMBEDDING_DIM=384
+ENV FASTEMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 
-# Expose port (Railway will override with $PORT)
 EXPOSE 8002
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/health')"
 
-# Run with uvicorn for production
 CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT} --workers 1"]

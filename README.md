@@ -1,6 +1,23 @@
 # LLM Assistant
 
-An AI-powered document assistant using Qdrant for vector search and Azure OpenAI for generative responses. The system supports document uploads (PDF, TXT, DOCX, CSV), intelligent chunking, embeddings, and Retrieval-Augmented Generation (RAG) for accurate answers based on your documents.
+An AI-powered IT-support agent using Qdrant for vector search and Azure OpenAI for generative responses. The system supports document uploads (PDF, TXT, DOCX, CSV), intelligent chunking, embeddings, and Retrieval-Augmented Generation (RAG) for accurate answers based on your documents.
+
+## GDPR setup checklist (production deploy)
+
+Before exposing this demo to customers, complete these steps so the GDPR story holds up:
+
+1. **Azure region in EU.** Deploy the Azure OpenAI resource in `swedencentral` or `westeurope`. Set `AZURE_REGION` env var to match.
+2. **Azure abuse-monitoring opt-out.** By default, Microsoft retains prompts for 30 days for abuse review. Submit the modified-data-handling form to disable that retention:
+   - <https://aka.ms/oai/additionalusecase>
+   - Once approved by Microsoft, set `AZURE_ABUSE_MONITORING_OPT_OUT=true` so `/gdpr/policy` reflects it.
+3. **Payload encryption.** Generate a 32-byte key and set `PAYLOAD_ENCRYPTION_KEY`. The Qdrant payload `text` field is then AES-256-GCM encrypted at rest:
+   ```bash
+   python -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"
+   ```
+4. **Retention.** Defaults are conservative: documents auto-deleted after 7 days (`DOCUMENT_TTL_DAYS`), logs after 30 days (`LOG_RETENTION_DAYS`). Adjust if your customers require shorter retention.
+5. **Rate limits.** `RATE_LIMIT_PER_MIN=10`, `RATE_LIMIT_PER_DAY=100`, `DAILY_TOKEN_BUDGET=50000` keep Azure costs bounded on a public demo. Tune for your traffic.
+6. **DPA (Data Processing Agreement).** Microsoft's standard Azure DPA covers Azure OpenAI. Link to it from the customer-facing materials. Railway's DPA is at <https://railway.com/legal/dpa>.
+7. **Verify EU residency in the data-flow diagram.** Open `/` and click the EU banner — the flow shows browser → Railway EU → Qdrant local → Azure OpenAI (Sweden Central).
 
 ## Features
 

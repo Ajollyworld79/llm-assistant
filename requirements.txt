@@ -1,42 +1,35 @@
-# Quart async web framework (Flask-compatible async)
+# Quart async web framework
 Quart==0.20.0
-
-# CORS support for Quart
 quart-cors==0.8.0
+uvicorn[standard]==0.38.0
 
-# Uvicorn ASGI server
-uvicorn==0.38.0
-
-# Azure OpenAI (async support)
+# Azure OpenAI (async)
 openai==1.107.1
 
-# Qdrant vector database (async support)
+# Vector DB
 qdrant-client==1.15.1
 
-python-dotenv==1.0.1
+# Embeddings: ONNX-based, no torch
+fastembed
 
-# For API testing (valgfri)
-requests==2.32.5
+# Document parsing
+pdfplumber
+python-docx==1.1.2
+pypdf==6.0.0
 
-
-pandas==2.2.3  # CSV processing til migration
-SQLAlchemy==2.0.43
+# Logging
 loguru==0.7.3
 concurrent-log-handler==0.9.28
 
-# Kryptering (bruges i Functions_module.py)
+# Process memory tracking (used by middleware + /backend metrics)
+psutil==7.0.0
+
+# Crypto (used for GDPR payload encryption in PR 2)
 pycryptodome==3.23.0
 
-# Erstattet ChromaDB med Qdrant for bedre async performance
+# Config
+python-dotenv==1.0.1
+pydantic
 
-# Document processing (til migration script)
-python-docx==1.1.2
-pypdf==6.0.0
-python-pptx==1.0.2
-
-aiohttp==3.12.15
-pyodbc==5.2.0
-aioodbc==0.5.0
-
-psutil==7.0.0
+# Dev
 pytest==8.3.3

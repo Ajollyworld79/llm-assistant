@@ -1,10 +1,8 @@
 import logging
 import io
 import csv
-import tempfile
 import os
 import asyncio
-import pandas as pd
 from pypdf import PdfReader
 
 # Setup logging
@@ -38,63 +36,30 @@ class ParserService:
             if lower.endswith('.txt') or lower.endswith('.md'):
                 return content.decode('utf-8', errors='replace')
 
-            # Enhanced CSV parsing: try pandas if available for better formats
             elif lower.endswith('.csv'):
                 s = content.decode('utf-8', errors='replace')
-                try:
-
-                    # Try to detect a header-oriented CSV with semicolon separators
-                    lines = s.splitlines()
-                    csv_start = 0
-                    gruppe_navn = ''
-                    found_header = False
-
-                    for i, line in enumerate(lines):
-                        line = line.strip()
-                        if line.startswith('Sheet:'):
-                            gruppe_navn = line.replace('Sheet:', '').strip()
-                        elif ';' in line or ',' in line:
-                            csv_start = i
-                            found_header = True
-                            break
-
-                    csv_lines = '\n'.join(lines[csv_start:]) if found_header else s
-
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as tmpf:
-                        tmpf.write(csv_lines)
-                        tmp_path = tmpf.name
-
-                    try:
-                        # Prefer semicolon when present
-                        sep = ';' if ';' in csv_lines else ','
-                        df = pd.read_csv(tmp_path, sep=sep, encoding='utf-8')
-                        content_out = f"**Data from {filename}**\n\n"
-
-                        for _, row in df.iterrows():
-                            row_data = []
-                            for col in df.columns:
-                                val = row[col]
-                                if pd.notna(val):
-                                    row_data.append(f"{col}: {val}")
-                            content_out += ' | '.join(row_data) + '\n'
-
-                        try:
-                            import os as _os
-                            _os.unlink(tmp_path)
-                        except Exception:
-                            pass
-
-                        return content_out
-                    except Exception:
-                        # Fallback to simple csv reader
-                        rows = list(csv.reader(io.StringIO(s)))
-                        lines = [', '.join(row) for row in rows]
-                        return '\n'.join(lines)
-                except Exception:
-                    # pandas or tempfile not available - simple fallback
-                    rows = list(csv.reader(io.StringIO(s)))
-                    lines = [', '.join(row) for row in rows]
-                    return '\n'.join(lines)
+                # Skip leading "Sheet:" preamble lines that some exports add
+                lines = s.splitlines()
+                csv_start = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('Sheet:'):
+                        csv_start = i + 1
+                    elif ';' in line or ',' in line:
+                        csv_start = i
+                        break
+                csv_text = '\n'.join(lines[csv_start:])
+                sep = ';' if ';' in csv_text else ','
+                reader = csv.reader(io.StringIO(csv_text), delimiter=sep)
+                rows = list(reader)
+                if not rows:
+                    return ''
+                header = rows[0]
+                out = [f"**Data from {filename}**", ""]
+                for row in rows[1:]:
+                    pairs = [f"{header[i]}: {val}" for i, val in enumerate(row) if i < len(header) and val.strip()]
+                    if pairs:
+                        out.append(' | '.join(pairs))
+                return '\n'.join(out)
 
             # PDF parsing with link extraction
             if lower.endswith('.pdf'):
@@ -155,16 +120,6 @@ class ParserService:
                                     txt = page.extract_text() or ''
                                     if txt.strip():
                                         text_parts.append(txt)
-                                    else:
-                                        # Try OCR fallback if pytesseract is available
-                                        try:
-                                            from PIL import Image
-                                            import pytesseract
-                                            img = page.to_image(resolution=150).original
-                                            ocr_txt = pytesseract.image_to_string(img)
-                                            text_parts.append(ocr_txt)
-                                        except Exception:
-                                            pass
                         except Exception:
                             return f"[Simulated PDF parsing for {filename} - pdf parsing libraries missing or failed]"
 

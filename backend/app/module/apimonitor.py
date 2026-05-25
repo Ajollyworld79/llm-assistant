@@ -1,12 +1,36 @@
 # LLM Assistant - API Monitoring
 # Migrated into module package
+import re
 import time
 import asyncio
 import dataclasses
 from collections import defaultdict, deque
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from uuid import uuid4
+
+
+# PII patterns scrubbed before any prompt is logged or returned via /gdpr/audit.
+# Ordered: most-specific first so e.g. CPR is not partially matched as a phone fragment.
+_PII_PATTERNS = [
+    (re.compile(r"\b\d{6}[-\s]?\d{4}\b"), "[cpr-redacted]"),
+    (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"), "[email-redacted]"),
+    (re.compile(r"(?:\+45[\s-]?)?(?:\d{2}[\s-]?){3}\d{2}\b"), "[phone-redacted]"),
+]
+
+
+def redact_pii(text: str) -> str:
+    """Replace emails, Danish CPR numbers, and phone numbers with placeholders.
+
+    Used before logging or surfacing user prompts in /gdpr/audit. Never call this
+    on retrieved document chunks — those should remain intact for the model.
+    """
+    if not text:
+        return text
+    out = text
+    for pattern, replacement in _PII_PATTERNS:
+        out = pattern.sub(replacement, out)
+    return out
 
 # Setup logging
 try:
@@ -34,6 +58,12 @@ class APIMetrics:
         "/upload": 120000.0,  # 2 minutes for uploads (parsing, chunking, embedding)
         "/admin/upload_vectors": 300000.0,  # 5 minutes for vector uploads (large batches)
     })
+    # GDPR audit log — recent (PII-redacted) prompts, capped at 50 entries
+    audit_events: deque = dataclasses.field(default_factory=lambda: deque(maxlen=50))
+    # Prompt cache tracking
+    cached_tokens_total: int = 0
+    prompt_tokens_total: int = 0
+    fallback_invocations: int = 0
 
     @property
     def avg_latency_ms(self) -> float:
@@ -247,5 +277,47 @@ class APIMonitor:
     async def get_health_summary_async(self) -> Dict[str, Any]:
         """Async version for health checks"""
         return self.get_health_summary()
+
+    # ---- GDPR audit + cache tracking ----
+
+    def record_audit_event(self, session_id: str, endpoint: str, prompt: str,
+                           model: Optional[str] = None) -> None:
+        """Append a PII-redacted prompt record. Used for /gdpr/audit view."""
+        self.metrics.audit_events.append({
+            "ts": datetime.now().isoformat(),
+            "session_id": session_id or "anon",
+            "endpoint": endpoint,
+            "prompt_redacted": redact_pii(prompt or "")[:500],
+            "model": model or "",
+        })
+
+    def get_audit_events(self, limit: int = 50, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        events = list(self.metrics.audit_events)
+        if session_id:
+            events = [e for e in events if e.get("session_id") == session_id]
+        return events[-limit:]
+
+    def clear_session_audit(self, session_id: str) -> int:
+        """Remove audit entries belonging to a session. Returns count removed."""
+        if not session_id:
+            return 0
+        before = len(self.metrics.audit_events)
+        kept = [e for e in self.metrics.audit_events if e.get("session_id") != session_id]
+        self.metrics.audit_events.clear()
+        self.metrics.audit_events.extend(kept)
+        return before - len(self.metrics.audit_events)
+
+    def record_cache_stats(self, prompt_tokens: int, cached_tokens: int) -> None:
+        self.metrics.prompt_tokens_total += max(0, int(prompt_tokens or 0))
+        self.metrics.cached_tokens_total += max(0, int(cached_tokens or 0))
+
+    def record_fallback_invocation(self) -> None:
+        self.metrics.fallback_invocations += 1
+
+    def get_cache_hit_ratio(self) -> float:
+        if self.metrics.prompt_tokens_total == 0:
+            return 0.0
+        return self.metrics.cached_tokens_total / self.metrics.prompt_tokens_total
+
 
 monitor = APIMonitor()

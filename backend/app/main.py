@@ -10,7 +10,7 @@
 - Search using cosine similarity
 - Demo-mode flag and simulated latency
 """
-from quart import Quart, request, jsonify, render_template
+from quart import Quart, request, jsonify, render_template, g
 from quart_cors import cors
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, cast
@@ -30,6 +30,7 @@ try:
     from .module.middleware import setup_middleware
     from .module.lifecycle import lifecycle
     from .module.apimonitor import monitor
+    from .module.crypto import encrypt_text, decrypt_text
 except ImportError:
     import os, sys
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +42,7 @@ except ImportError:
     from module.middleware import setup_middleware
     from module.lifecycle import lifecycle
     from module.apimonitor import monitor
+    from module.crypto import encrypt_text, decrypt_text
     # Garbage collection manager (optional psutil dependency)
     try:
         from .module.garbage_collection import gc_manager
@@ -86,6 +88,18 @@ app = cors(app, allow_origin="*")
 
 # Register Middleware
 setup_middleware(app)
+
+# Register GDPR blueprint (forget/export/audit/policy)
+try:
+    from .routes.gdpr import gdpr_bp
+    app.register_blueprint(gdpr_bp)
+except ImportError:
+    try:
+        from routes.gdpr import gdpr_bp
+        app.register_blueprint(gdpr_bp)
+    except Exception as _e:
+        import logging as _l
+        _l.getLogger(__name__).warning("Could not register gdpr_bp: %s", _e)
 
 DEMO_BANNER = "Demo mode — results are simulated; no active LLM connection."
 EMBED_DIM = settings.embedding_dim
@@ -427,19 +441,20 @@ async def upload_file():
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     file_type = filename.split('.')[-1].upper() if '.' in filename else 'TXT'
     
+    session_id = getattr(g, 'session_id', 'anon')
     for idx, (c, emb) in enumerate(zip(chunks, embeddings_batch)):
         if emb is None:
-             # Skip empty embeddings
              continue
         points.append(qmodels.PointStruct(
-            id=str(uuid.uuid4()), 
-            vector=emb, 
+            id=str(uuid.uuid4()),
+            vector=emb,
             payload={
-                "filename": filename, 
-                "chunk_index": idx, 
-                "text": c,
+                "filename": filename,
+                "chunk_index": idx,
+                "text": encrypt_text(c),
                 "uploaded_at": timestamp,
-                "type": file_type
+                "type": file_type,
+                "session_id": session_id,
             }
         ))
 
@@ -590,9 +605,10 @@ async def admin_reindex_in_memory():
                     payload={
                         "filename": filename,
                         "chunk_index": idx,
-                        "text": c.get('text',''),
+                        "text": encrypt_text(c.get('text','')),
                         "uploaded_at": d.get('uploaded_at') or timestamp,
                         "type": file_type,
+                        "session_id": getattr(g, 'session_id', 'anon'),
                     }
                 ))
             if not points:
@@ -730,7 +746,7 @@ async def search():
     # If using in-memory only:
     if not lifecycle.qdrant_client:
         # manual embedding
-        q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}")
+        q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}", is_query=True)
         q_emb = q_embs[0]
         results = []
         for d in DOCUMENTS:
@@ -750,9 +766,9 @@ async def search():
         # Use qdrant_service helper to build filters
         query_filter = qdrant_service.build_filters(filters)
 
-        q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}")
+        q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}", is_query=True)
         q_emb = q_embs[0]
-        
+
         results = []
         try:
             client = lifecycle.qdrant_client
@@ -777,7 +793,7 @@ async def search():
                 results.append({
                     'doc_id': getattr(hit, 'id'),
                     'filename': payload.get('filename', 'unknown'),
-                    'chunk_text': (payload.get('text', '')[:400] + ('...' if len(payload.get('text', '')) > 400 else '')),
+                    'chunk_text': (lambda t: t[:400] + ('...' if len(t) > 400 else ''))(decrypt_text(payload.get('text', ''))),
                     'score': float(score),
                 })
         except Exception as e:
@@ -834,10 +850,16 @@ async def search():
             answer = f"Error generating answer: {str(e)}"
 
     monitor.end_request(request_id, success=True)
+    monitor.record_audit_event(
+        session_id=getattr(g, 'session_id', 'anon'),
+        endpoint='/search',
+        prompt=query,
+        model=getattr(support_agent.ai_manager, 'last_used_model', None) or getattr(settings, 'azure_deployment_chat', None),
+    )
     return jsonify({
-        "results": top, 
+        "results": top,
         "used_documents": [{"doc_id": r.get("doc_id"), "filename": r.get("filename"), "score": r.get("score"), "chunk_text": r.get("chunk_text")} for r in top],
-        "demo": settings.demo, 
+        "demo": settings.demo,
         "message": DEMO_BANNER if settings.demo else "",
         "answer": answer,
         "sources": list(unique_files) if 'unique_files' in locals() else [],

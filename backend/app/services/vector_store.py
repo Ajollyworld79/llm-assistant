@@ -29,6 +29,17 @@ except ImportError:
     except ImportError:
         pass
 
+try:
+    from backend.app.module.crypto import encrypt_text, decrypt_text
+except ImportError:
+    try:
+        from module.crypto import encrypt_text, decrypt_text
+    except ImportError:
+        def encrypt_text(t):
+            return t
+        def decrypt_text(t):
+            return t
+
 # Setup logging
 try:
     from backend.app.module.Functions_module import setup_logger
@@ -117,18 +128,16 @@ class EmbeddingAdapter:
         self.settings = settings_obj
         self.embedding_service = service
 
-    async def embed_texts(self, texts: list[str], provider: Optional[str] = None, context: Optional[str] = None) -> list[list[float]]:
-        # Demo mode: deterministic embedding
+    async def embed_texts(self, texts: list[str], provider: Optional[str] = None, context: Optional[str] = None,
+                          is_query: bool = False) -> list[list[float]]:
         if getattr(self.settings, 'demo', False):
-            # run deterministic embedding synchronously but in thread to avoid blocking
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, lambda: [self.embedding_service.deterministic_embed(t) for t in texts])
 
         try:
-            # Prefer project's embeddings.embed_texts if available
             prov = provider if provider is not None else getattr(self.settings, 'embedding_provider', "")
             prov = str(prov) if prov is not None else ""
-            return await embeddings.embed_texts(texts, provider=prov, context=context)
+            return await embeddings.embed_texts(texts, provider=prov, context=context, is_query=is_query)
         except Exception as e:
             logger.warning('EmbeddingAdapter falling back to deterministic due to: %s', e)
             loop = asyncio.get_running_loop()
@@ -191,7 +200,7 @@ class QdrantService:
         for hit in res or []:
             payload = getattr(hit, 'payload', {}) or {}
             if payload.get('filename') == doc_id or payload.get('file_name') == doc_id:
-                chunks.append({"text": payload.get('text', ''), "chunk_index": payload.get('chunk_index', 0)})
+                chunks.append({"text": decrypt_text(payload.get('text', '')), "chunk_index": payload.get('chunk_index', 0)})
 
         return chunks
 
@@ -317,7 +326,7 @@ class QdrantService:
             processed_query = self.preprocess_query(query_text)
 
             # Generate embedding
-            emb_list = await embedding_adapter.embed_texts([processed_query], provider=settings.embedding_provider, context=f"search:{processed_query[:80]}")
+            emb_list = await embedding_adapter.embed_texts([processed_query], provider=settings.embedding_provider, context=f"search:{processed_query[:80]}", is_query=True)
             if not emb_list:
                 return {"context": "", "sources": [], "embedding_time": 0.0, "search_time": 0.0}
             vector = emb_list[0]
@@ -375,7 +384,7 @@ class QdrantService:
                 for hit in results:
                     payload = getattr(hit, 'payload', {}) or {}
                     score = getattr(hit, 'score', None) or 0.0
-                    text = payload.get('text', '')
+                    text = decrypt_text(payload.get('text', ''))
                     title_src = payload.get('file_name') or payload.get('filename') or 'Document'
                     title = title_src.replace('.pdf','').replace('.docx','').replace('_',' ')
 
@@ -525,7 +534,7 @@ class QdrantAdapter:
                 payload = {
                     'filename': filename,
                     'chunk_index': idx,
-                    'text': txt,
+                    'text': encrypt_text(txt),
                     'uploaded_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
                     'type': filename.split('.')[-1].upper() if '.' in filename else 'FILE'
                 }
