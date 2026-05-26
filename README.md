@@ -85,16 +85,14 @@ QDRANT_COLLECTION=documents
 QDRANT_FORCE_RECREATE=false
 
 # Embedding configuration
-EMBEDDING_PROVIDER=azure  # or 'sentence' for local
-EMBEDDING_DIM=3072  # 384 for sentence, 3072 for azure large
+EMBEDDING_PROVIDER=fastembed
+EMBEDDING_DIM=384
 EMBEDDING_TIMEOUT=10
 
-# Azure OpenAI (required if DEMO=false)
-AZURE_OPENAI_API_KEY=your-api-key
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_OPENAI_API_VERSION=2024-02-15-preview
-AZURE_DEPLOYMENT_CHAT=gpt-4
-AZURE_DEPLOYMENT_EMBED=text-embedding-3-large
+# Gemini (free Google AI Studio key — required if DEMO=false)
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL_FALLBACK=gemini-2.0-flash
 
 # Admin token for protected endpoints
 ADMIN_TOKEN=your-secure-token
@@ -104,13 +102,11 @@ ADMIN_TOKEN=your-secure-token
 
 The system automatically uses local Qdrant database in the `local_qdrant_db/` folder. Data persists between restarts.
 
-### Azure OpenAI Setup
+### Gemini setup
 
-1. Create Azure OpenAI resource
-2. Deploy models:
-   - `gpt-4` or `gpt-35-turbo` for chat
-   - `text-embedding-3-large` for embeddings (3072 dim)
-3. Copy API key, endpoint, and deployment names to `.env`
+1. Grab a free API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Set `GEMINI_API_KEY` in your environment (or on Railway as a project variable).
+3. Default primary model is `gemini-2.5-flash`, fallback is `gemini-2.0-flash` — both on the free tier.
 
 ## Usage
 

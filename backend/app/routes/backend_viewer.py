@@ -9,7 +9,6 @@ Endpoints:
   /backend/api/system  -> sanitized settings + deploy info
   /backend/api/connections -> per-service status dots
   /backend/api/metrics -> live counters (memory, requests, cache ratio, budget)
-  /backend/api/gdpr    -> retention + encryption + abuse-opt-out
   /backend/api/prompt  -> current system prompt + schema (for playground)
   /backend/api/models  -> model catalog with primary/fallback annotation
   /backend/api/usage/summary    -> top-line history
@@ -30,7 +29,6 @@ try:
     from ..config import settings
     from ..module.lifecycle import lifecycle
     from ..module.apimonitor import monitor
-    from ..module.crypto import is_enabled as crypto_enabled
     from ..module.demo_lock import is_locked as demo_is_locked
     from ..module.rate_limiter import get_limiter
     from ..module.model_catalog import catalog_for_viewer
@@ -44,7 +42,6 @@ except ImportError:
     settings = _cfg.settings
     from module.lifecycle import lifecycle
     from module.apimonitor import monitor
-    from module.crypto import is_enabled as crypto_enabled
     from module.demo_lock import is_locked as demo_is_locked
     from module.rate_limiter import get_limiter
     from module.model_catalog import catalog_for_viewer
@@ -68,13 +65,12 @@ async def index():
 async def api_system():
     git_sha = os.environ.get('GIT_SHA') or os.environ.get('RAILWAY_GIT_COMMIT_SHA') or 'unknown'
     return jsonify({
-        "model_primary": settings.azure_deployment_chat or 'not_configured',
-        "model_fallback": settings.azure_deployment_chat_fallback or 'not_configured',
+        "model_primary": settings.gemini_model or 'not_configured',
+        "model_fallback": settings.gemini_model_fallback or 'not_configured',
         "embedding_provider": settings.embedding_provider,
         "embedding_model": settings.fastembed_model,
         "embedding_dim": settings.embedding_dim,
-        "azure_region": os.environ.get('AZURE_REGION', 'swedencentral'),
-        "azure_api_version": settings.azure_openai_api_version,
+        "llm_provider": "Google Gemini (free API)",
         "git_sha": git_sha[:12] if git_sha != 'unknown' else git_sha,
         "deployed_at": os.environ.get('RAILWAY_DEPLOYMENT_STARTED_AT', ''),
         "uptime_seconds": int(time.time() - _START_TIME),
@@ -109,10 +105,10 @@ async def api_connections():
         "last_check_at": now_iso,
     }
 
-    # Azure OpenAI — best-effort: presence of credentials counts as "configured"
-    azure_configured = bool(settings.azure_openai_api_key and settings.azure_openai_endpoint and settings.azure_deployment_chat)
-    out["azure_openai"] = {
-        "status": "up" if azure_configured else "unconfigured",
+    # Gemini — best-effort: presence of API key counts as "configured"
+    gemini_configured = bool(settings.gemini_api_key and settings.gemini_model)
+    out["gemini"] = {
+        "status": "up" if gemini_configured else "unconfigured",
         "last_check_at": now_iso,
     }
 
@@ -177,28 +173,6 @@ async def api_metrics():
     })
 
 
-@backend_bp.get('/api/gdpr')
-async def api_gdpr():
-    retention_state = {}
-    try:
-        worker = getattr(lifecycle, '_retention_worker', None)
-        if worker:
-            retention_state = worker.state()
-    except Exception:
-        pass
-    return jsonify({
-        "retention": retention_state,
-        "encryption_enabled": crypto_enabled(),
-        "abuse_monitoring_opted_out": os.environ.get('AZURE_ABUSE_MONITORING_OPT_OUT', '').lower() in ('1', 'true', 'yes'),
-        "data_flow": [
-            {"step": "Browser", "region": "user"},
-            {"step": "Railway", "region": "EU"},
-            {"step": "Qdrant (local volume)", "region": "EU"},
-            {"step": "Azure OpenAI", "region": os.environ.get('AZURE_REGION', 'swedencentral')},
-        ],
-    })
-
-
 @backend_bp.get('/api/prompt')
 async def api_prompt():
     """Surface the current system prompt + schema for the playground."""
@@ -212,8 +186,8 @@ async def api_prompt():
 
 @backend_bp.get('/api/models')
 async def api_models():
-    primary = settings.azure_deployment_chat or ''
-    fallback = settings.azure_deployment_chat_fallback or ''
+    primary = settings.gemini_model or ''
+    fallback = settings.gemini_model_fallback or ''
     return jsonify({
         "models": catalog_for_viewer(primary, fallback),
         "active_primary": primary,

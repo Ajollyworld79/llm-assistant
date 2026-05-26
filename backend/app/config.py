@@ -23,13 +23,18 @@ class Settings:
         self.fastembed_model = os.getenv('FASTEMBED_MODEL', 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
         self.embedding_timeout = int(os.getenv('EMBEDDING_TIMEOUT', '10'))
 
-        # Azure OpenAI
-        self.azure_openai_api_key = os.getenv('AZURE_OPENAI_API_KEY')
-        self.azure_openai_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
-        self.azure_openai_api_version = os.getenv('AZURE_OPENAI_API_VERSION', '2024-02-15-preview')
-        self.azure_deployment_chat = os.getenv('AZURE_DEPLOYMENT_CHAT')
-        self.azure_deployment_chat_fallback = os.getenv('AZURE_DEPLOYMENT_CHAT_FALLBACK')
-        self.azure_deployment_embed = os.getenv('AZURE_DEPLOYMENT_EMBED')
+        # Gemini (free Google AI Studio API) — accept upper or lower case env var names
+        self.gemini_api_key = (
+            os.getenv('GEMINI_API_KEY')
+            or os.getenv('gemini_api_key')
+            or os.getenv('GOOGLE_API_KEY')
+        )
+        self.gemini_model = os.getenv('GEMINI_MODEL') or os.getenv('gemini_model') or 'gemini-2.5-flash'
+        self.gemini_model_fallback = (
+            os.getenv('GEMINI_MODEL_FALLBACK')
+            or os.getenv('gemini_model_fallback')
+            or 'gemini-2.0-flash'
+        )
 
         # Admin token for protecting upload/reset endpoints
         self.admin_token = os.getenv('ADMIN_TOKEN') or None
@@ -52,11 +57,6 @@ class Settings:
         self.RATE_LIMIT_PER_DAY = int(os.getenv('RATE_LIMIT_PER_DAY', '100'))
         self.RATE_LIMIT_PER_SESSION = int(os.getenv('RATE_LIMIT_PER_SESSION', '20'))
         self.DAILY_TOKEN_BUDGET = int(os.getenv('DAILY_TOKEN_BUDGET', '50000'))
-
-        # GDPR retention — float allows sub-day values during testing (e.g. 0.001 ≈ 1.5 min)
-        self.DOCUMENT_TTL_DAYS = float(os.getenv('DOCUMENT_TTL_DAYS', '7'))
-        self.LOG_RETENTION_DAYS = int(os.getenv('LOG_RETENTION_DAYS', '30'))
-        self.RETENTION_SCAN_INTERVAL_SECONDS = int(os.getenv('RETENTION_SCAN_INTERVAL_SECONDS', '3600'))
 
         # Demo matching thresholds
         self.DEMO_MATCH_RATIO = float(os.getenv('DEMO_MATCH_RATIO', '0.6'))

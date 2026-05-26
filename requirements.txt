@@ -3,8 +3,8 @@ Quart==0.20.0
 quart-cors==0.8.0
 uvicorn[standard]==0.38.0
 
-# Azure OpenAI (async)
-openai==1.107.1
+# Gemini (free Google AI Studio API, async-capable)
+google-genai>=1.0.0
 
 # Vector DB
 qdrant-client==1.15.1

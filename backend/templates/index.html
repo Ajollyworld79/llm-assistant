@@ -40,14 +40,6 @@
             </nav>
 
             <div class="gdpr-sidebar">
-                <div class="gdpr-sidebar-title">Dine data</div>
-                <button class="gdpr-btn" onclick="gdprExport()" title="Hent alt vi har gemt fra din session">
-                    Eksporter
-                </button>
-                <button class="gdpr-btn gdpr-btn-danger" onclick="gdprForget()" title="Slet alt vi har gemt fra din session">
-                    Slet mine data
-                </button>
-                <a class="gdpr-link" href="/gdpr/policy" target="_blank">GDPR-politik</a>
                 <a class="gdpr-link" href="/backend" target="_blank">Backend</a>
             </div>
         </aside>
@@ -58,21 +50,6 @@
                 <div class="nav-item" onclick="setView('chat')" id="nav-chat-mobile">Chat Assistant</div>
                 <div class="nav-item" onclick="setView('admin')" id="nav-admin-mobile">Knowledge Base</div>
             </div>
-            <div class="eu-banner" onclick="toggleFlowDiagram()" title="Klik for at se data-flow">
-                <span class="eu-flag">🇪🇺</span>
-                <span class="eu-text">Data behandles i Azure Sweden Central + Railway EU + lokal Qdrant. Ingen 3.-parts sub-processors.</span>
-                <span class="eu-chevron">▾</span>
-            </div>
-            <div id="flow-diagram" class="flow-diagram" hidden>
-                <div class="flow-step"><div class="flow-icon">🖥️</div><div class="flow-label">Browser</div></div>
-                <div class="flow-arrow">→</div>
-                <div class="flow-step"><div class="flow-icon">🚂</div><div class="flow-label">Railway<br><small>EU</small></div></div>
-                <div class="flow-arrow">→</div>
-                <div class="flow-step"><div class="flow-icon">📦</div><div class="flow-label">Qdrant<br><small>local volume</small></div></div>
-                <div class="flow-arrow">→</div>
-                <div class="flow-step"><div class="flow-icon">🤖</div><div class="flow-label">Azure OpenAI<br><small>Sweden Central</small></div></div>
-            </div>
-
             {% if demo_mode %}
             <div id="demo-banner" class="demo-banner">
                 <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -94,7 +71,17 @@
                     </div>
 
                     <div class="input-area">
-                        <textarea id="query-input" placeholder="Ask a question about your documents..." onkeypress="handleKeyPress(event)"></textarea>
+                        <textarea id="query-input" placeholder="Ask a question, or attach a document/image..." onkeypress="handleKeyPress(event)"></textarea>
+                        <input type="file" id="chat-file-input" multiple style="display:none"
+                               accept=".pdf,.docx,.txt,.csv,.md,.pptx,.png,.jpg,.jpeg,.webp,.gif"
+                               onchange="handleChatFileSelect(event)" />
+                        <button onclick="document.getElementById('chat-file-input').click()"
+                                id="attach-btn" class="btn btn-secondary" title="Attach document or image">
+                            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                            </svg>
+                        </button>
                         <button onclick="doSearch()" id="send-btn" class="btn btn-primary">
                             <span id="send-icon">
                                 <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -105,6 +92,7 @@
                             Send
                         </button>
                     </div>
+                    <div id="chat-attachments" class="chat-attachments" hidden></div>
                 </div>
             </div>
 
@@ -259,16 +247,69 @@
             }
         }
 
+        // Chat attachment state — image files go inline to /search, document files
+        // are uploaded into the KB first, then the query runs against them.
+        let chatAttachments = [];
+        const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+
+        function handleChatFileSelect(e) {
+            const files = Array.from(e.target.files || []);
+            chatAttachments = chatAttachments.concat(files);
+            renderChatAttachments();
+            e.target.value = '';
+        }
+
+        function renderChatAttachments() {
+            const wrap = document.getElementById('chat-attachments');
+            if (!wrap) return;
+            if (chatAttachments.length === 0) {
+                wrap.hidden = true;
+                wrap.innerHTML = '';
+                return;
+            }
+            wrap.hidden = false;
+            wrap.innerHTML = chatAttachments.map((f, idx) => {
+                const ext = (f.name.split('.').pop() || '').toLowerCase();
+                const icon = IMAGE_EXTS.includes(ext) ? '🖼️' : '📄';
+                return `<span class="chat-attachment-chip">${icon} ${escapeHtml(f.name)}
+                    <button onclick="removeChatAttachment(${idx})" title="Remove">×</button></span>`;
+            }).join('');
+        }
+
+        function removeChatAttachment(idx) {
+            chatAttachments.splice(idx, 1);
+            renderChatAttachments();
+        }
+
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const result = reader.result || '';
+                    const comma = String(result).indexOf(',');
+                    resolve(comma >= 0 ? String(result).slice(comma + 1) : String(result));
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
         async function doSearch() {
             const input = document.getElementById('query-input');
             const query = input.value.trim();
-            if (!query) return;
+            const hasAttachments = chatAttachments.length > 0;
+            if (!query && !hasAttachments) return;
 
-            // Add user message
-            addMessage('user', query);
+            const userLabel = hasAttachments
+                ? `${query || '(see attachment)'}  📎 ${chatAttachments.length} file(s)`
+                : query;
+            addMessage('user', userLabel);
             input.value = '';
-            
-            // UI State
+
+            const attached = chatAttachments.slice();
+            chatAttachments = [];
+            renderChatAttachments();
+
             const btn = document.getElementById('send-btn');
             const icon = document.getElementById('send-icon');
             const spinner = document.getElementById('send-spinner');
@@ -277,17 +318,40 @@
             spinner.style.display = 'inline-block';
 
             try {
+                const imagePayload = [];
+                const docFiles = [];
+                for (const f of attached) {
+                    const ext = (f.name.split('.').pop() || '').toLowerCase();
+                    if (IMAGE_EXTS.includes(ext)) {
+                        const b64 = await fileToBase64(f);
+                        imagePayload.push({ data_base64: b64, mime_type: f.type || `image/${ext === 'jpg' ? 'jpeg' : ext}` });
+                    } else {
+                        docFiles.push(f);
+                    }
+                }
+
+                for (const f of docFiles) {
+                    const fd = new FormData();
+                    fd.append('file', f);
+                    const headers = {};
+                    if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
+                    const upRes = await fetch(BASE + '/upload', { method: 'POST', body: fd, headers });
+                    if (!upRes.ok) {
+                        addMessage('bot', `Could not index ${f.name} (status ${upRes.status}).`);
+                    }
+                }
+
+                const body = { query: query || 'Please analyze the attached content.', top_k: 4 };
+                if (imagePayload.length > 0) body.images = imagePayload;
+
                 const res = await fetch(BASE + '/search', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query, top_k: 4 })
+                    body: JSON.stringify(body)
                 });
                 const data = await res.json();
-                
-                // Add bot response with results
                 const answer = data.answer || data.message || 'Here are the most relevant results from your documents:';
                 addMessage('bot', answer, data.results);
-                
             } catch (e) {
                 addMessage('bot', 'Sorry, an error occurred while searching: ' + e.message);
             } finally {
@@ -707,76 +771,7 @@
             alert("Token saved.");
         }
 
-        // ---------- GDPR ----------
-        function toggleFlowDiagram() {
-            const d = document.getElementById('flow-diagram');
-            if (d) d.hidden = !d.hidden;
-        }
-
-        function showConsentIfFirstVisit() {
-            if (localStorage.getItem('demo_consent_v1') === 'true') return;
-            const modal = document.getElementById('consent-modal');
-            if (modal) modal.hidden = false;
-        }
-
-        function acceptConsent() {
-            localStorage.setItem('demo_consent_v1', 'true');
-            const modal = document.getElementById('consent-modal');
-            if (modal) modal.hidden = true;
-        }
-
-        async function gdprForget() {
-            if (!confirm("Er du sikker? Alle dokumenter og logs fra din session slettes permanent.")) return;
-            try {
-                const resp = await fetch('/gdpr/forget', { method: 'POST', credentials: 'same-origin' });
-                const data = await resp.json();
-                if (resp.ok) {
-                    alert(`Slettet: ${data.deleted_points} chunks + ${data.audit_entries_removed} log-entries.`);
-                    location.reload();
-                } else {
-                    alert("Kunne ikke slette: " + (data.detail || data.error));
-                }
-            } catch (e) {
-                alert("Fejl ved sletning: " + e.message);
-            }
-        }
-
-        async function gdprExport() {
-            try {
-                const resp = await fetch('/gdpr/export', { credentials: 'same-origin' });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    alert("Kunne ikke eksportere: " + (data.detail || data.error));
-                    return;
-                }
-                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `gdpr-export-${(data.session_id || 'session').slice(0,8)}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-            } catch (e) {
-                alert("Fejl ved eksport: " + e.message);
-            }
-        }
-
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', showConsentIfFirstVisit);
-        } else {
-            showConsentIfFirstVisit();
-        }
     </script>
-
-    <div id="consent-modal" class="consent-modal" hidden>
-        <div class="consent-card">
-            <h3>Velkommen til demoen</h3>
-            <p>Denne demo gemmer dine uploadede dokumenter i op til <strong>7 dage</strong>, hvorefter de slettes automatisk. Dine prompts logges PII-redacted (email, CPR, telefon strippes før logning).</p>
-            <p>Alle data behandles i EU (Azure Sweden Central + Railway EU). Du kan til enhver tid trykke <em>"Slet mine data"</em> i sidebaren.</p>
-            <p class="consent-warning">⚠️ Demo er offentlig — upload ikke følsomme personoplysninger.</p>
-            <button class="consent-accept" onclick="acceptConsent()">OK, jeg forstår</button>
-        </div>
-    </div>
 
     <div id="corner-credits" class="corner-credits" aria-hidden="true">© <span id="corner-year"></span> Gustav Wind Christensen • Built with Quart &amp; Qdrant</div>
     <script>

@@ -23,7 +23,7 @@
     {% endif %}
     <div id="connection-banner" class="connection-banner">
         <span data-conn="qdrant">⚪ Qdrant</span>
-        <span data-conn="azure_openai">⚪ Azure OpenAI</span>
+        <span data-conn="gemini">⚪ Gemini</span>
         <span data-conn="embedding_model">⚪ Embedding</span>
         <span data-conn="logger">⚪ Logger</span>
         <span data-conn="usage_db">⚪ Usage DB</span>
@@ -32,7 +32,6 @@
         <button class="bk-tab active" data-tab="overview" onclick="setTab('overview')">Overview</button>
         <button class="bk-tab" data-tab="models" onclick="setTab('models')">Models</button>
         <button class="bk-tab" data-tab="prompt" onclick="setTab('prompt')">Prompt Playground</button>
-        <button class="bk-tab" data-tab="gdpr" onclick="setTab('gdpr')">GDPR &amp; Data Flow</button>
         <button class="bk-tab" data-tab="usage" onclick="setTab('usage')">Usage History</button>
     </nav>
 </div>
@@ -68,9 +67,9 @@
             <div class="tile-dot" id="tile-qdrant-dot"></div>
         </div>
         <div class="tile">
-            <div class="tile-label">Region</div>
+            <div class="tile-label">LLM provider</div>
             <div class="tile-value" id="tile-region">—</div>
-            <div class="tile-sub">EU residency</div>
+            <div class="tile-sub">Free tier</div>
             <div class="tile-dot tile-dot-green"></div>
         </div>
         <div class="tile">
@@ -84,18 +83,6 @@
             <div class="tile-value" id="tile-tokens-used">— / —</div>
             <div class="tile-sub">Resets <span id="tile-budget-reset">—</span></div>
             <div class="tile-dot" id="tile-budget-dot"></div>
-        </div>
-        <div class="tile">
-            <div class="tile-label">Retention</div>
-            <div class="tile-value" id="tile-retention">—</div>
-            <div class="tile-sub" id="tile-retention-logs">—</div>
-            <div class="tile-dot tile-dot-green"></div>
-        </div>
-        <div class="tile">
-            <div class="tile-label">Encryption (at rest)</div>
-            <div class="tile-value" id="tile-encryption">—</div>
-            <div class="tile-sub">AES-256-GCM</div>
-            <div class="tile-dot" id="tile-encryption-dot"></div>
         </div>
     </div>
 
@@ -170,35 +157,6 @@
             <pre id="prompt-preview" class="prompt-preview">loading…</pre>
             <button class="playground-send" disabled title="Disabled in demo — use the chat page to test">Send to model</button>
             <div class="playground-note">Local preview only. Server-side prompt unchanged.</div>
-        </div>
-    </div>
-</section>
-
-<!-- ====== TAB: GDPR & DATA FLOW ====== -->
-<section class="bk-tab-panel" id="tab-gdpr" hidden>
-    <h2>GDPR &amp; Data Flow</h2>
-    <div class="flow-and-gdpr">
-        <div class="flow-card">
-            <h3>Data flow</h3>
-            <div class="flow-row">
-                <div class="flow-step"><div class="flow-icon">🖥️</div><div class="flow-label">Browser</div></div>
-                <div class="flow-arrow">→</div>
-                <div class="flow-step"><div class="flow-icon">🚂</div><div class="flow-label">Railway<br><small>EU</small></div></div>
-                <div class="flow-arrow">→</div>
-                <div class="flow-step"><div class="flow-icon">📦</div><div class="flow-label">Qdrant<br><small>local volume</small></div></div>
-                <div class="flow-arrow">→</div>
-                <div class="flow-step"><div class="flow-icon">🤖</div><div class="flow-label">Azure OpenAI<br><small id="flow-region">—</small></div></div>
-            </div>
-        </div>
-        <div class="gdpr-card">
-            <h3>Policy status</h3>
-            <table class="gdpr-table">
-                <tr><td>Document TTL</td><td id="g-ttl">— days</td></tr>
-                <tr><td>Log retention</td><td id="g-logttl">— days</td></tr>
-                <tr><td>Encryption at rest</td><td id="g-enc">—</td></tr>
-                <tr><td>Azure abuse opt-out</td><td id="g-abuse">—</td></tr>
-                <tr><td>Next cleanup</td><td id="g-next">—</td></tr>
-            </table>
         </div>
     </div>
 </section>

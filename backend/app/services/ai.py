@@ -1,12 +1,14 @@
 import json
 import logging
 import asyncio
-from typing import Optional, Tuple, Any, List, Dict, cast
+from typing import Optional, Tuple, Any, List, Dict
 
 try:
-    from openai import AsyncAzureOpenAI
+    from google import genai
+    from google.genai import types as genai_types
 except ImportError:
-    AsyncAzureOpenAI = None
+    genai = None
+    genai_types = None
 
 try:
     from .prompt import SYSTEM_PROMPT, SUPPORT_ANSWER_SCHEMA, SOURCE_TO_INDICATOR
@@ -34,50 +36,63 @@ except ImportError:
         logger = logging.getLogger(__name__)
 
 
+def _schema_to_genai(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip JSON-schema fields Gemini does not accept while keeping the structure."""
+    inner = schema_dict.get("schema", schema_dict)
+    drop_keys = {"additionalProperties", "strict"}
+
+    def _clean(node):
+        if isinstance(node, dict):
+            cleaned = {k: _clean(v) for k, v in node.items() if k not in drop_keys}
+            # Gemini does not accept union types like ["string", "null"]; collapse to string.
+            t = cleaned.get("type")
+            if isinstance(t, list):
+                non_null = [x for x in t if x != "null"]
+                cleaned["type"] = non_null[0] if non_null else "string"
+            return cleaned
+        if isinstance(node, list):
+            return [_clean(x) for x in node]
+        return node
+
+    return _clean(inner)
+
 
 class AIManager:
-    """Central AI manager for chat completions with prompt-caching layout and fallback model."""
+    """Chat completions backed by the free Gemini API (google-genai)."""
 
     def __init__(self, settings_obj, embeddings_module, client=None):
         self.settings = settings_obj
         self.embeddings = embeddings_module
         self._client = client
-        # Aggregate counters surfaced via /monitor and /backend/api/metrics
         self.last_used_model: Optional[str] = None
-        self.last_cached_tokens: int = 0
         self.last_total_tokens: int = 0
+        self.last_cached_tokens: int = 0  # Gemini does not expose this; kept for metric compatibility
         self.fallback_invocation_count: int = 0
+        self._response_schema = _schema_to_genai(SUPPORT_ANSWER_SCHEMA)
 
     def initialize_client(self) -> None:
-        if self._client is None:
-            if AsyncAzureOpenAI is None:
-                logger.warning("AsyncAzureOpenAI is not available; AI calls will be disabled")
-                return
-            try:
-                self._client = AsyncAzureOpenAI(
-                    api_key=cast(str, getattr(self.settings, "azure_openai_api_key", "")),
-                    api_version=cast(str, getattr(self.settings, "azure_openai_api_version", "")),
-                    azure_endpoint=cast(str, getattr(self.settings, "azure_openai_endpoint", "")),
-                )
-                logger.info("AIManager: AsyncAzureOpenAI client initialized")
-            except Exception as e:
-                logger.exception("AIManager: failed to initialize client: %s", e)
-                self._client = None
+        if self._client is not None:
+            return
+        if genai is None:
+            logger.warning("google-genai not installed; AI calls will be disabled")
+            return
+        api_key = getattr(self.settings, "gemini_api_key", None)
+        if not api_key:
+            logger.warning("GEMINI_API_KEY not set; AI calls will be disabled")
+            return
+        try:
+            self._client = genai.Client(api_key=api_key)
+            logger.info("AIManager: Gemini client initialized")
+        except Exception as e:
+            logger.exception("AIManager: failed to initialize Gemini client: %s", e)
+            self._client = None
 
-    def _build_messages(self, query: str, context: str, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Build messages with stable system prefix to maximize cache hits.
-
-        Layout: system (stable) → history (stable within session) → current user (dynamic).
-        Retrieved context is placed INSIDE the current user message, not the system,
-        because context varies per query and would otherwise invalidate the cache.
-        """
+    def _build_contents(self, query: str, context: str, history: List[Dict[str, str]],
+                        images: Optional[List[Dict[str, str]]] = None) -> List[Any]:
         max_ctx = int(getattr(self.settings, "MAX_CONTEXT_CHARS", 4000))
         ctx = (context[:max_ctx] + "\n\n...[truncated]...") if context and len(context) > max_ctx else (context or "")
 
-        messages: List[Dict[str, str]] = [
-            {"role": "system", "content": SYSTEM_PROMPT}
-        ]
-
+        contents: List[Any] = []
         max_history = int(getattr(self.settings, "MAX_CONVERSATION_HISTORY", 6))
         for msg in (history or [])[-max_history:]:
             if not isinstance(msg, dict):
@@ -85,55 +100,56 @@ class AIManager:
             u = msg.get("user", "")
             a = msg.get("assistant", "")
             if u:
-                messages.append({"role": "user", "content": u})
+                contents.append(genai_types.Content(role="user", parts=[genai_types.Part(text=u)]))
             if a:
-                messages.append({"role": "assistant", "content": a})
+                contents.append(genai_types.Content(role="model", parts=[genai_types.Part(text=a)]))
 
         user_msg = f"Konteksten:\n{ctx}\n\nSpørgsmål: {query}"
-        messages.append({"role": "user", "content": user_msg})
-        return messages
+        parts: List[Any] = [genai_types.Part(text=user_msg)]
+        import base64
+        for img in (images or []):
+            data_b64 = img.get("data_base64") or ""
+            mime = img.get("mime_type") or "image/png"
+            if not data_b64:
+                continue
+            try:
+                raw = base64.b64decode(data_b64)
+                parts.append(genai_types.Part.from_bytes(data=raw, mime_type=mime))
+            except Exception as e:
+                logger.warning("Skipping invalid image attachment: %s", e)
+        contents.append(genai_types.Content(role="user", parts=parts))
+        return contents
 
-    async def _call_azure(self, model: str, messages: List[Dict[str, str]]):
+    async def _call_gemini(self, model: str, contents: List[Any]):
         temperature = float(getattr(self.settings, "TEMPERATURE", 0.1))
         max_tokens = int(getattr(self.settings, "MAX_TOKENS", 400))
-        response_format = {"type": "json_schema", "json_schema": SUPPORT_ANSWER_SCHEMA}
+        config = genai_types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            response_mime_type="application/json",
+            response_schema=self._response_schema,
+        )
+        return await self._client.aio.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
 
-        # gpt-5 family prefers max_completion_tokens; older models use max_tokens.
-        # Try the new name first; fall back if SDK or model rejects it.
-        try:
-            return await self._client.chat.completions.create(
-                model=model,
-                messages=cast(Any, messages),
-                temperature=temperature,
-                max_completion_tokens=max_tokens,
-                response_format=response_format,
-            )
-        except TypeError:
-            return await self._client.chat.completions.create(
-                model=model,
-                messages=cast(Any, messages),
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format=response_format,
-            )
-
-    def _record_usage(self, completion, model_used: str) -> None:
+    def _record_usage(self, response, model_used: str) -> None:
         self.last_used_model = model_used
         try:
-            usage = getattr(completion, "usage", None)
+            usage = getattr(response, "usage_metadata", None)
             if usage is None:
                 return
-            self.last_total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
-            details = getattr(usage, "prompt_tokens_details", None)
-            cached = 0
-            if details is not None:
-                cached = int(getattr(details, "cached_tokens", 0) or 0)
-            self.last_cached_tokens = cached
+            prompt_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+            completion_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+            self.last_total_tokens = int(getattr(usage, "total_token_count", prompt_tokens + completion_tokens) or 0)
+            self.last_cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
         except Exception as e:
-            logger.debug("Failed to record usage: %s", e)
+            logger.debug("Failed to record Gemini usage: %s", e)
             return
 
-        # Decrement the persistent daily budget so subsequent requests see the cost
         try:
             try:
                 from backend.app.module.rate_limiter import get_limiter
@@ -143,28 +159,23 @@ class AIManager:
         except Exception as e:
             logger.debug("Failed to record tokens to limiter: %s", e)
 
-        # Surface prompt-cache ratio for /backend/api/metrics
         try:
             try:
                 from backend.app.module.apimonitor import monitor as _mon
             except ImportError:
                 from module.apimonitor import monitor as _mon
-            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
             _mon.record_cache_stats(prompt_tokens, self.last_cached_tokens)
         except Exception as e:
             logger.debug("Failed to record cache stats: %s", e)
 
-        # Log usage event to history DB for /backend graphs
         try:
             try:
                 from backend.app.module.usage_db import usage_db
             except ImportError:
                 from module.usage_db import usage_db
-            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-            is_fallback = (model_used == getattr(self.settings, "azure_deployment_chat_fallback", ""))
+            is_fallback = (model_used == getattr(self.settings, "gemini_model_fallback", ""))
             usage_db.log_event(
-                session_id=None,  # filled by caller if available
+                session_id=None,
                 endpoint="/search",
                 model=model_used,
                 tokens_input=prompt_tokens,
@@ -178,7 +189,8 @@ class AIManager:
             logger.debug("Failed to log usage event: %s", e)
 
     async def ask_agent_with_context(self, query: str, context: str,
-                                     conversation_history: Optional[list] = None) -> Tuple[str, Optional[int]]:
+                                     conversation_history: Optional[list] = None,
+                                     images: Optional[List[Dict[str, str]]] = None) -> Tuple[str, Optional[int]]:
         if conversation_history is None:
             conversation_history = []
 
@@ -196,29 +208,26 @@ class AIManager:
         if self._client is None:
             return ("Sorry, the assistant is currently unavailable.", None)
 
-        primary = cast(str, getattr(self.settings, "azure_deployment_chat", ""))
-        fallback = cast(str, getattr(self.settings, "azure_deployment_chat_fallback", "") or "")
+        primary = getattr(self.settings, "gemini_model", "") or ""
+        fallback = getattr(self.settings, "gemini_model_fallback", "") or ""
         if not primary:
-            logger.warning("AIManager: no chat model configured")
+            logger.warning("AIManager: no Gemini model configured")
             return ("Sorry, the assistant is not configured.", None)
 
-        messages = self._build_messages(query, context, conversation_history)
+        contents = self._build_contents(query, context, conversation_history, images=images)
 
-        # Primary attempt
         try:
-            completion = await self._call_azure(primary, messages)
-            raw = getattr(completion.choices[0].message, "content", "") or ""
-            self._record_usage(completion, primary)
+            response = await self._call_gemini(primary, contents)
+            raw = getattr(response, "text", "") or ""
+            self._record_usage(response, primary)
             return self._parse_structured_response(raw)
         except Exception as e:
             err_text = str(e).lower()
-            is_content_filter = "content_filter" in err_text or "responsibleaipolicyviolation" in err_text
-            if is_content_filter and not fallback:
-                # Content filter on primary, no fallback configured — don't retry, surface block
-                return "__CONTENT_FILTER_BLOCKED__", None
+            if "blocked" in err_text or "safety" in err_text:
+                if not fallback:
+                    return "__CONTENT_FILTER_BLOCKED__", None
             logger.warning("Primary model %s failed (%s); attempting fallback", primary, e.__class__.__name__)
 
-        # Fallback attempt
         if not fallback:
             return ("Sorry, something went wrong with the assistant.", None)
 
@@ -232,24 +241,18 @@ class AIManager:
                 _mon.record_fallback_invocation()
             except Exception:
                 pass
-            completion = await self._call_azure(fallback, messages)
-            raw = getattr(completion.choices[0].message, "content", "") or ""
-            self._record_usage(completion, fallback)
+            response = await self._call_gemini(fallback, contents)
+            raw = getattr(response, "text", "") or ""
+            self._record_usage(response, fallback)
             return self._parse_structured_response(raw)
         except Exception as e:
             err_text = str(e).lower()
-            if "content_filter" in err_text or "responsibleaipolicyviolation" in err_text:
+            if "blocked" in err_text or "safety" in err_text:
                 return "__CONTENT_FILTER_BLOCKED__", None
             logger.exception("Fallback model %s also failed: %s", fallback, e)
             return ("Sorry, the assistant is currently unavailable.", None)
 
     def _parse_structured_response(self, raw: str) -> Tuple[str, Optional[int]]:
-        """Parse JSON returned by the structured-output completion.
-
-        Returns (markdown_answer, source_indicator) where source_indicator
-        matches the legacy 0/1 convention so callers don't need to change.
-        Falls back to treating raw as plain text if JSON parsing fails.
-        """
         if not raw:
             return raw, None
         try:

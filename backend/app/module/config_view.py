@@ -14,9 +14,8 @@ ALLOWED_KEYS = {
     "demo", "qdrant_path", "qdrant_collection",
     # Embeddings
     "embedding_provider", "embedding_dim", "fastembed_model", "embedding_timeout",
-    # Azure (deployment NAMES are not secrets — endpoint URL and key are)
-    "azure_openai_api_version", "azure_deployment_chat", "azure_deployment_chat_fallback",
-    "azure_deployment_embed",
+    # Gemini (model NAMES are not secrets — only the API key is)
+    "gemini_model", "gemini_model_fallback",
     # Search behavior
     "TOP_K_RESULTS", "SIMILARITY_THRESHOLD", "DOMAIN_GUARD_THRESHOLD",
     "QDRANT_SCORE_THRESHOLD", "MAX_SEARCH_LIMIT",
@@ -27,16 +26,13 @@ ALLOWED_KEYS = {
     # Rate limits + budget
     "RATE_LIMIT_PER_MIN", "RATE_LIMIT_PER_DAY", "RATE_LIMIT_PER_SESSION",
     "DAILY_TOKEN_BUDGET",
-    # GDPR retention
-    "DOCUMENT_TTL_DAYS", "LOG_RETENTION_DAYS", "RETENTION_SCAN_INTERVAL_SECONDS",
     # Logging
     "LOG_TO_FILE",
 }
 
 # These exist on settings but must NEVER be exposed.
 NEVER_EXPOSE = {
-    "azure_openai_api_key",
-    "azure_openai_endpoint",  # URL leaks tenant
+    "gemini_api_key",
     "admin_token",
     "qdrant_api_key",
 }
@@ -47,11 +43,7 @@ def safe_config_dict(settings_obj) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for key in ALLOWED_KEYS:
         if key in NEVER_EXPOSE:
-            # Defensive — shouldn't be in allowlist anyway.
             continue
         if hasattr(settings_obj, key):
-            value = getattr(settings_obj, key)
-            # Mask deployment names that contain secret-looking suffixes? No —
-            # deployment names are not secrets. The KEY is.
-            out[key] = value
+            out[key] = getattr(settings_obj, key)
     return out

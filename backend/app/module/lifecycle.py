@@ -91,14 +91,6 @@ class LifeCycleManager:
         except Exception as e:
             logger.warning(f'Failed to start GC periodic task: {e}')
 
-        # Start GDPR retention worker
-        try:
-            from .retention import get_worker
-            self._retention_worker = get_worker(self, settings)
-            self._retention_worker.start()
-        except Exception as e:
-            logger.warning(f'Failed to start RetentionWorker: {e}')
-
         # Initialize usage history DB (postgres if DATABASE_URL is set, otherwise memory)
         try:
             from .usage_db import usage_db
@@ -120,14 +112,6 @@ class LifeCycleManager:
                     logger.info('GC periodic task cancelled successfully')
         except Exception as e:
             logger.warning(f'Error cancelling GC task: {e}')
-
-        # Stop retention worker
-        try:
-            worker = getattr(self, '_retention_worker', None)
-            if worker:
-                await worker.stop()
-        except Exception:
-            logger.debug('Retention worker shutdown failed')
 
         # Close usage DB pool
         try:

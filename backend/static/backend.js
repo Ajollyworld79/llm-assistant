@@ -69,10 +69,9 @@ async function pollSystem() {
         setText('tile-fallback-model', s.model_fallback);
         setText('tile-embed-model', s.embedding_model);
         setText('tile-embed-dim', `${s.embedding_dim} dim`);
-        setText('tile-region', s.azure_region);
+        setText('tile-region', s.llm_provider);
         setText('tile-git-sha', s.git_sha);
         setText('tile-uptime', `uptime ${humanSeconds(s.uptime_seconds)}`);
-        setText('flow-region', s.azure_region);
         document.getElementById('config-pre').textContent = JSON.stringify(s.config, null, 2);
     } catch (e) {
         console.warn('pollSystem failed', e);
@@ -84,7 +83,7 @@ async function pollConnections() {
         const c = await jget('/backend/api/connections');
         const map = {
             qdrant: { status: 'up' },
-            azure_openai: { status: 'up' },
+            gemini: { status: 'up' },
             embedding_model: { status: 'loaded' },
             logger: { status: 'writing' },
             usage_db: { status: 'up' },
@@ -101,9 +100,9 @@ async function pollConnections() {
         setDot('tile-qdrant-dot', c.qdrant?.status === 'up' ? 'green' : 'red');
         setText('tile-qdrant-points', c.qdrant?.points_count ?? '—');
         setDot('tile-embed-dot', c.embedding_model?.status === 'loaded' ? 'green' : 'yellow');
-        const azureColor = c.azure_openai?.status === 'up' ? 'green' : (c.azure_openai?.status === 'unconfigured' ? 'yellow' : 'red');
-        setDot('tile-primary-dot', azureColor);
-        setDot('tile-fallback-dot', azureColor);
+        const geminiColor = c.gemini?.status === 'up' ? 'green' : (c.gemini?.status === 'unconfigured' ? 'yellow' : 'red');
+        setDot('tile-primary-dot', geminiColor);
+        setDot('tile-fallback-dot', geminiColor);
     } catch (e) {
         console.warn('pollConnections failed', e);
     }
@@ -133,25 +132,6 @@ async function pollMetrics() {
         setDot('tile-budget-dot', budgetColor);
     } catch (e) {
         console.warn('pollMetrics failed', e);
-    }
-}
-
-async function pollGdpr() {
-    try {
-        const g = await jget('/backend/api/gdpr');
-        setText('tile-encryption', g.encryption_enabled ? 'Enabled' : 'Disabled');
-        setDot('tile-encryption-dot', g.encryption_enabled ? 'green' : 'yellow');
-        const ttl = g.retention?.document_ttl_days;
-        setText('tile-retention', ttl !== undefined ? `${ttl} dage` : '—');
-        setText('tile-retention-logs', `logs: ${g.retention?.log_retention_days ?? '—'} dage`);
-
-        setText('g-ttl', `${ttl ?? '—'} dage`);
-        setText('g-logttl', `${g.retention?.log_retention_days ?? '—'} dage`);
-        setText('g-enc', g.encryption_enabled ? 'AES-256-GCM ✅' : 'Disabled ⚠️');
-        setText('g-abuse', g.abuse_monitoring_opted_out ? 'Opted out ✅' : 'Default 30d retention ⚠️');
-        setText('g-next', shortIso(g.retention?.next_run_at));
-    } catch (e) {
-        console.warn('pollGdpr failed', e);
     }
 }
 
@@ -299,13 +279,11 @@ async function bootstrap() {
     await loadPrompt();
     pollConnections();
     pollMetrics();
-    pollGdpr();
     pollUsage();
 
     setInterval(pollSystem, SYS_POLL_MS);
     setInterval(pollConnections, CONN_POLL_MS);
     setInterval(pollMetrics, METRICS_POLL_MS);
-    setInterval(pollGdpr, METRICS_POLL_MS);
     setInterval(pollModels, SYS_POLL_MS);
     setInterval(pollUsage, USAGE_POLL_MS);
 }

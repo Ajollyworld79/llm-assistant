@@ -3,12 +3,12 @@
 # Date: December 2025
 # Description: Quart-based backend for document upload, search, and RAG chat using Qdrant and Azure OpenAI
 
-"""Quart-based demo backend for Qdrant-style search + FastEmbed simulation.
+"""Quart-based demo backend for Qdrant-style search + FastEmbed.
 - Async endpoints
 - Upload and parse files (txt, csv, pdf, docx)
-- Chunking and deterministic embedding (hash-based)
+- Chunking and embedding (FastEmbed)
 - Search using cosine similarity
-- Demo-mode flag and simulated latency
+- RAG chat backed by the free Gemini API
 """
 from quart import Quart, request, jsonify, render_template, g
 from quart_cors import cors
@@ -71,11 +71,6 @@ except ImportError as e:
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
-try:
-    from openai import AsyncAzureOpenAI
-except ImportError:
-    AsyncAzureOpenAI = None
-
 # Setup logging
 try:
     from .module.Functions_module import setup_logger
@@ -91,20 +86,17 @@ app = cors(app, allow_origin="*")
 # Register Middleware
 setup_middleware(app)
 
-# Register GDPR + backend-viewer blueprints
+# Register backend-viewer blueprint
 def _register_blueprints():
     import logging as _l
     _log = _l.getLogger(__name__)
     try:
         try:
-            from .routes.gdpr import gdpr_bp
             from .routes.backend_viewer import backend_bp
         except ImportError:
-            from routes.gdpr import gdpr_bp
             from routes.backend_viewer import backend_bp
-        app.register_blueprint(gdpr_bp)
         app.register_blueprint(backend_bp)
-        _log.info("Registered blueprints: gdpr, backend_viewer")
+        _log.info("Registered blueprints: backend_viewer")
     except Exception as _e:
         _log.warning("Could not register blueprints: %s", _e)
 
@@ -287,12 +279,12 @@ async def health():
         except Exception as e:
             basic_health["components"]["qdrant"] = {"status": "error", "error": str(e)}
 
-        # OpenAI availability (best-effort)
+        # Gemini availability (best-effort)
         try:
-            openai_status = "healthy" if AsyncAzureOpenAI and getattr(settings, 'azure_openai_api_key', None) else "unavailable"
-            basic_health["components"]["openai"] = {"status": openai_status}
+            gemini_status = "healthy" if getattr(settings, 'gemini_api_key', None) else "unavailable"
+            basic_health["components"]["gemini"] = {"status": gemini_status}
         except Exception as e:
-            basic_health["components"]["openai"] = {"status": "error", "error": str(e)}
+            basic_health["components"]["gemini"] = {"status": "error", "error": str(e)}
 
         try:
             basic_health["components"]["database"] = {"status": "not_configured"}
@@ -741,6 +733,7 @@ async def search():
     top_k = int(payload.get('top_k', 5))
     simulate_latency = payload.get('simulate_latency', True)
     filters = payload.get('filters', None) # Extract filters
+    images = payload.get('images', None)  # Optional [{data_base64, mime_type}, ...] for multimodal Gemini
 
     if not query:
         monitor.end_request(request_id, success=False, error="query is required")
@@ -816,13 +809,11 @@ async def search():
         unique_files = set(r['filename'] for r in top)
 
     answer = None
-    # Debug: log AI branch decisions
-    logger.info("AI branch check: demo=%s, AsyncAzureOpenAI=%s, key=%s, endpoint=%s, deployment=%s", settings.demo, bool(AsyncAzureOpenAI), getattr(settings, 'azure_openai_api_key', None), getattr(settings, 'azure_openai_endpoint', None), getattr(settings, 'azure_deployment_chat', None))
+    logger.info("AI branch check: demo=%s, gemini_key_set=%s, model=%s",
+                settings.demo, bool(getattr(settings, 'gemini_api_key', None)), getattr(settings, 'gemini_model', None))
 
-    # Demo-mode branch: use deterministic DemoLLM and clearly note that no chat model is available
     if settings.demo:
         try:
-            # Apply demo matching thresholds: only include chunks that pass confidence checks
             best_score = max((r.get('score', 0.0) for r in top), default=0.0)
             ratio = float(getattr(settings, 'DEMO_MATCH_RATIO', 0.4))
             min_score = float(getattr(settings, 'DEMO_MIN_MATCH_SCORE', 0.0))
@@ -842,17 +833,15 @@ async def search():
             logger.exception("Demo LLM failed: %s", e)
             answer = "(Demo mode) Sorry, demo generation failed."
 
-    elif not settings.demo and AsyncAzureOpenAI:
+    else:
         try:
-            if not settings.azure_openai_api_key or not settings.azure_openai_endpoint or not settings.azure_deployment_chat:
-                answer = "Azure OpenAI not configured (Key, Endpoint, or Chat Deployment missing)."
+            if not getattr(settings, 'gemini_api_key', None):
+                answer = "Gemini API not configured (GEMINI_API_KEY missing)."
             else:
-                # Build context from top search results
                 context_parts = [f"Source ({r['filename']}): {r['chunk_text']}" for r in top]
                 context = "\n\n".join(context_parts)
 
-                # Ask via AIManager (returns cleaned text and source indicator)
-                cleaned, source_indicator = await support_agent.ai_manager.ask_agent_with_context(query, context, conversation_history=[])
+                cleaned, source_indicator = await support_agent.ai_manager.ask_agent_with_context(query, context, conversation_history=[], images=images)
 
                 if cleaned == "__CONTENT_FILTER_BLOCKED__":
                     answer = "Content blocked by safety filters."
@@ -863,12 +852,6 @@ async def search():
             answer = f"Error generating answer: {str(e)}"
 
     monitor.end_request(request_id, success=True)
-    monitor.record_audit_event(
-        session_id=getattr(g, 'session_id', 'anon'),
-        endpoint='/search',
-        prompt=query,
-        model=getattr(support_agent.ai_manager, 'last_used_model', None) or getattr(settings, 'azure_deployment_chat', None),
-    )
     return jsonify({
         "results": top,
         "used_documents": [{"doc_id": r.get("doc_id"), "filename": r.get("filename"), "score": r.get("score"), "chunk_text": r.get("chunk_text")} for r in top],

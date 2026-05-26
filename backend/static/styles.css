@@ -188,6 +188,40 @@ textarea {
   transition: border-color 0.2s, box-shadow 0.2s;
   background: #f8fafc;
 }
+
+.chat-attachments {
+  padding: 0.5rem 2rem 0.75rem;
+  background: white;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  background: #eef2ff;
+  color: #3730a3;
+  border-radius: 9999px;
+  font-size: 0.85rem;
+  border: 1px solid #c7d2fe;
+}
+.chat-attachment-chip button {
+  background: transparent;
+  border: none;
+  color: #6366f1;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+}
+.chat-attachment-chip button:hover { color: #312e81; }
+#attach-btn {
+  padding: 0.6rem 0.8rem;
+  height: 60px;
+}
 textarea:focus { 
   border-color: var(--primary); 
   background: white;

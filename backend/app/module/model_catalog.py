@@ -1,8 +1,8 @@
 """Static model catalog used by the backend viewer.
 
-Pricing reflects Azure AI Foundry as of May 2026. Numbers are USD per 1M tokens.
-The viewer reads `role` from this list and from settings.azure_deployment_chat
-to mark the active primary/fallback pair.
+Pricing is $0 because we are on the free Google AI Studio tier. The viewer
+reads `role` from this list and from settings.gemini_model to mark the active
+primary/fallback pair.
 """
 from __future__ import annotations
 
@@ -11,69 +11,37 @@ from typing import List, Dict, Any
 
 MODELS: List[Dict[str, Any]] = [
     {
-        "id": "gpt-5-nano",
-        "label": "GPT-5 nano",
-        "vendor": "OpenAI",
-        "input_per_m_usd": 0.05,
-        "output_per_m_usd": 0.40,
-        "context_window": 128_000,
-        "description": "Billigste i Azure OpenAI-familien. Hurtig, god til RAG-syntese.",
+        "id": "gemini-2.5-flash",
+        "label": "Gemini 2.5 Flash",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Free tier. Latest Flash — fast, multimodal, supports JSON schema output.",
     },
     {
-        "id": "gpt-5-mini",
-        "label": "GPT-5 mini",
-        "vendor": "OpenAI",
-        "input_per_m_usd": 0.15,
-        "output_per_m_usd": 0.60,
-        "context_window": 128_000,
-        "description": "Stærkere reasoning end nano. Anbefales som fallback.",
+        "id": "gemini-2.0-flash",
+        "label": "Gemini 2.0 Flash",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Free tier fallback. Slightly older Flash — solid latency and quality.",
     },
     {
-        "id": "mistral-small-3.2",
-        "label": "Mistral Small 3.2",
-        "vendor": "Mistral (EU)",
-        "input_per_m_usd": 0.10,
-        "output_per_m_usd": 0.30,
-        "context_window": 128_000,
-        "description": "EU-native (fransk firma). Stærkere GDPR-fortælling, multilingual.",
-    },
-    {
-        "id": "gpt-4o-mini",
-        "label": "GPT-4o mini",
-        "vendor": "OpenAI",
-        "input_per_m_usd": 0.15,
-        "output_per_m_usd": 0.60,
-        "context_window": 128_000,
-        "description": "Tidligere baseline. Stadig god, men dyrere end gpt-5-nano.",
-    },
-    {
-        "id": "deepseek-v3.2",
-        "label": "DeepSeek V3.2",
-        "vendor": "DeepSeek (CN)",
-        "input_per_m_usd": 0.14,
-        "output_per_m_usd": 0.28,
-        "context_window": 64_000,
-        "description": "Kvalitet/$-leder. Kinesisk firma — svagere GDPR-vinkel.",
-    },
-    {
-        "id": "grok-3-mini",
-        "label": "Grok 3 mini",
-        "vendor": "xAI",
-        "input_per_m_usd": 0.30,
-        "output_per_m_usd": 0.50,
-        "context_window": 128_000,
-        "description": "xAI på Azure Foundry. Dyrere — kun relevant hvis kunden spørger efter Grok.",
+        "id": "gemini-2.5-flash-lite",
+        "label": "Gemini 2.5 Flash Lite",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Cheapest/fastest Flash. Use for high-volume light queries.",
     },
 ]
 
 
 def catalog_for_viewer(active_primary: str, active_fallback: str) -> List[Dict[str, Any]]:
-    """Return MODELS with `role` annotation based on the deployment names.
-
-    The deployment names are matched case-insensitively against model ids — a
-    deployment is typically named after the model, but operators can rename, so
-    fall back to `id` matching as a substring check.
-    """
+    """Return MODELS with `role` annotation based on the configured model ids."""
     primary_l = (active_primary or '').strip().lower()
     fallback_l = (active_fallback or '').strip().lower()
 
