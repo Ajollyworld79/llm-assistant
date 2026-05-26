@@ -114,34 +114,35 @@ JSON output:
 
 # ---- Structured output schema ---------------------------------------------
 
+# Pydantic model is the SDK-recommended way to drive response_schema with
+# google-genai — it handles type conversion (OpenAPI uppercase types, nullable
+# unions, etc.) automatically so we don't fight the schema format ourselves.
+from typing import Literal, Optional  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
+
+
+class SupportAnswer(BaseModel):
+    source: Literal["documents", "general_knowledge", "refusal"] = Field(
+        description="Where the answer comes from, or 'refusal' if out of scope."
+    )
+    language: Literal["da", "en", "other"] = Field(
+        description="Language of answer_markdown."
+    )
+    answer_markdown: str = Field(
+        description="User-facing answer in Markdown. Refusals still get one polite sentence."
+    )
+    refusal_reason: Optional[str] = Field(
+        default=None,
+        description="Short snake_case reason when source is 'refusal', otherwise null.",
+    )
+
+
+# Kept for backwards-compatible imports (e.g. /backend/api/prompt). The schema
+# itself is now the Pydantic class above; this dict is just a human-readable
+# preview for the playground UI.
 SUPPORT_ANSWER_SCHEMA = {
     "name": "support_answer",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "source": {
-                "type": "string",
-                "enum": ["documents", "general_knowledge", "refusal"],
-                "description": "Where the answer comes from, or 'refusal' if out of scope.",
-            },
-            "language": {
-                "type": "string",
-                "enum": ["da", "en", "other"],
-                "description": "Language of answer_markdown.",
-            },
-            "answer_markdown": {
-                "type": "string",
-                "description": "User-facing answer in Markdown. Empty string is not allowed; refusals still get one polite sentence.",
-            },
-            "refusal_reason": {
-                "type": ["string", "null"],
-                "description": "Short snake_case reason when source is 'refusal', otherwise null.",
-            },
-        },
-        "required": ["source", "language", "answer_markdown", "refusal_reason"],
-    },
+    "schema": SupportAnswer.model_json_schema(),
 }
 
 

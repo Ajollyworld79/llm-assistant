@@ -11,9 +11,9 @@ except ImportError:
     genai_types = None
 
 try:
-    from .prompt import SYSTEM_PROMPT, SUPPORT_ANSWER_SCHEMA, SOURCE_TO_INDICATOR
+    from .prompt import SYSTEM_PROMPT, SOURCE_TO_INDICATOR, SupportAnswer
 except ImportError:
-    from prompt import SYSTEM_PROMPT, SUPPORT_ANSWER_SCHEMA, SOURCE_TO_INDICATOR
+    from prompt import SYSTEM_PROMPT, SOURCE_TO_INDICATOR, SupportAnswer
 
 try:
     from backend.app.config import settings
@@ -36,27 +36,6 @@ except ImportError:
         logger = logging.getLogger(__name__)
 
 
-def _schema_to_genai(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Strip JSON-schema fields Gemini does not accept while keeping the structure."""
-    inner = schema_dict.get("schema", schema_dict)
-    drop_keys = {"additionalProperties", "strict"}
-
-    def _clean(node):
-        if isinstance(node, dict):
-            cleaned = {k: _clean(v) for k, v in node.items() if k not in drop_keys}
-            # Gemini does not accept union types like ["string", "null"]; collapse to string.
-            t = cleaned.get("type")
-            if isinstance(t, list):
-                non_null = [x for x in t if x != "null"]
-                cleaned["type"] = non_null[0] if non_null else "string"
-            return cleaned
-        if isinstance(node, list):
-            return [_clean(x) for x in node]
-        return node
-
-    return _clean(inner)
-
-
 class AIManager:
     """Chat completions backed by the free Gemini API (google-genai)."""
 
@@ -68,7 +47,8 @@ class AIManager:
         self.last_total_tokens: int = 0
         self.last_cached_tokens: int = 0  # Gemini does not expose this; kept for metric compatibility
         self.fallback_invocation_count: int = 0
-        self._response_schema = _schema_to_genai(SUPPORT_ANSWER_SCHEMA)
+        # Pydantic class — google-genai converts to Gemini's schema format internally.
+        self._response_schema = SupportAnswer
 
     def initialize_client(self) -> None:
         if self._client is not None:
@@ -273,11 +253,12 @@ class AIManager:
             if start >= 0 and end > start:
                 try:
                     obj = json.loads(candidate[start:end + 1])
-                except Exception as e:
-                    logger.warning("Structured output JSON parse failed (raw len=%d): %r", len(raw), raw[:200])
+                except Exception:
+                    # f-string so output is visible even if logger formatter does not interpolate args.
+                    logger.warning(f"Structured output JSON parse failed (raw len={len(raw)}): {raw[:400]!r}")
                     return raw.strip(), None
             else:
-                logger.warning("Structured output JSON parse failed (raw len=%d): %r", len(raw), raw[:200])
+                logger.warning(f"Structured output JSON parse failed (raw len={len(raw)}): {raw[:400]!r}")
                 return raw.strip(), None
 
         answer = (obj.get("answer_markdown") or "").strip()
