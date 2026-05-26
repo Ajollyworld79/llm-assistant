@@ -34,7 +34,7 @@ try:
     from ..module.model_catalog import catalog_for_viewer
     from ..module.config_view import safe_config_dict
     from ..module.usage_db import usage_db
-    from ..services.prompt import SYSTEM_PROMPT, SUPPORT_ANSWER_SCHEMA
+    from ..services.prompt import SYSTEM_PROMPT, CHAT_ANSWER_SCHEMA
 except ImportError:
     import sys as _sys, os as _os
     _sys.path.insert(0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), '..')))
@@ -47,7 +47,7 @@ except ImportError:
     from module.model_catalog import catalog_for_viewer
     from module.config_view import safe_config_dict
     from module.usage_db import usage_db
-    from services.prompt import SYSTEM_PROMPT, SUPPORT_ANSWER_SCHEMA
+    from services.prompt import SYSTEM_PROMPT, CHAT_ANSWER_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ async def api_prompt():
     """Surface the current system prompt + schema for the playground."""
     return jsonify({
         "system_prompt": SYSTEM_PROMPT,
-        "schema": SUPPORT_ANSWER_SCHEMA,
+        "schema": CHAT_ANSWER_SCHEMA,
         "example_context": "(handbook.pdf) Adgangskoder skal ændres hver 90. dag og må ikke genbruges.",
         "example_query": "Hvor ofte skal jeg skifte adgangskode?",
     })

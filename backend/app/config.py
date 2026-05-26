@@ -51,8 +51,11 @@ class Settings:
         self.QDRANT_SCORE_THRESHOLD = float(os.getenv('QDRANT_SCORE_THRESHOLD', '0.15'))
         self.MAX_SEARCH_LIMIT = int(os.getenv('MAX_SEARCH_LIMIT', '15'))
 
-        # AI model defaults — capped low to limit Azure output cost (output is 4x input on gpt-5-nano)
-        self.MAX_TOKENS = int(os.getenv('MAX_TOKENS', '400'))
+        # AI model defaults. Gemini is free, and structured-output JSON adds ~80 tokens
+        # of overhead (field names, quotes, escapes) before the answer even starts —
+        # 400 was a hard truncation that broke JSON parsing. 2000 gives ~1500 tokens of
+        # real answer room while still keeping latency bounded.
+        self.MAX_TOKENS = int(os.getenv('MAX_TOKENS', '2000'))
         self.TEMPERATURE = float(os.getenv('TEMPERATURE', '0.1'))
 
         # Rate limiting — public demo guardrails

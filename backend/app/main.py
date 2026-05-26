@@ -19,10 +19,9 @@ import time
 import asyncio
 import random
 import logging
-import datetime   
-import inspect             
+import datetime
+import inspect
 from functools import wraps
-import re
 
 try:
     from .config import settings
@@ -105,24 +104,17 @@ _register_blueprints()
 DEMO_BANNER = "Demo mode — results are simulated; no active LLM connection."
 EMBED_DIM = settings.embedding_dim
 
-# Friendly user-facing responses used by validation and safety checks
-NON_IT_RESPONSE = (
-    "That question doesn't appear related to IT or work tasks (recipes, sports, travel, etc.). "
-    "I can help with IT topics such as Microsoft 365, Windows, networking, printers, and related business questions. "
-    "Please rephrase your question with an IT focus so I can assist."
-)
-
 CONTENT_FILTER_RESPONSE = (
     "The assistant could not comply with the request due to content policy restrictions. "
-    "If you believe this is an error, please rephrase the request or contact support."
+    "If you believe this is an error, please rephrase the request."
 )
 
 
 def get_welcome_prompt() -> str:
     """Return the welcome message shown on the index page (demo-aware)."""
-    base = "Hello! I'm your AI assistant powered by Qdrant. Upload documents to the Knowledge Base to get started, or ask me questions about existing data."
+    base = "Hej! 👋 Jeg er din AI-chatbot. Spørg mig om hvad som helst, eller upload dokumenter/billeder direkte i chatten for at få svar baseret på dem."
     if getattr(settings, "demo", False):
-        return f"{base} Note: demo mode is active and responses are simulated."
+        return f"{base} (Demo mode er aktiv — svarene er simulerede.)"
     return base
 
 
@@ -131,63 +123,6 @@ class SearchRequest(BaseModel):
     top_k: int = 5
     simulate_latency: bool = True
     filters: Optional[Dict[str, Any]] = None # Added for Metadata Filtering
-
-
-# ------------------------- Helper classes (portfolio demo) -------------------------
-class DomainClassifier:
-    """Lightweight domain classifier for demo: IT vs non-IT vs math."""
-
-    def __init__(self) -> None:
-        self.non_it_keywords = set([
-            'recipe', 'recipes', 'food', 'cooking', 'travel', 'movie', 'music', 'book', 'books', 'sport', 'sports',
-        ])
-        self.it_keywords = set([
-            'windows', 'excel', 'outlook', 'teams', 'sharepoint', 'onedrive', 'word', 'powerpoint', 'vpn', 'printer', 'network', 'wifi', 'email', 'password', 'printer', 'linux', 'azure', 'microsoft'
-        ])
-
-    def is_math_query(self, text: str) -> bool:
-        if not text:
-            return False
-        clean_text = text.replace(' ', '').strip()
-        math_pattern = re.compile(r"^[\d\+\-\*\/\(\)\=\.\,\s]*[\+\-\*\/][\d\+\-\*\/\(\)\=\.\,\s]*$")
-        if math_pattern.match(clean_text):
-            return True
-        math_keywords = ['plus', 'minus', 'times', 'divide', 'percentage', '%']
-        text_lower = text.lower()
-        has_math_word = any(word in text_lower for word in math_keywords)
-        has_numbers = any(char.isdigit() for char in text)
-        return has_math_word and has_numbers
-
-    def classify_query_domain(self, text: str) -> dict:
-        if not text or not text.strip():
-            return {'domain': 'unknown', 'is_it': False}
-        if self.is_math_query(text):
-            return {'domain': 'math', 'is_it': False}
-        q = text.lower()
-        for k in self.non_it_keywords:
-            if k in q:
-                return {'domain': 'non_it', 'is_it': False}
-        for k in self.it_keywords:
-            if k in q:
-                return {'domain': 'it', 'is_it': True}
-        return {'domain': 'unknown', 'is_it': True}
-
-
-class ValidationManager:
-    """Validate user input and provide friendly messages."""
-
-    def __init__(self, domain_classifier: DomainClassifier) -> None:
-        self.domain_classifier = domain_classifier
-
-    def validate_user_query(self, query: str, max_chars: int = 2000) -> tuple[bool, Optional[str]]:
-        if not query or not query.strip():
-            return False, "Please provide a non-empty query."
-        if len(query) > max_chars:
-            return False, "The query is too long; please shorten it."
-        classification = self.domain_classifier.classify_query_domain(query)
-        if classification.get('domain') == 'non_it':
-            return False, NON_IT_RESPONSE
-        return True, None
 
 
 class AuthManager:
@@ -213,8 +148,6 @@ class AuthManager:
         return decorated_function
 
 # Instantiate helpers
-domain_classifier = DomainClassifier()
-validation_manager = ValidationManager(domain_classifier)
 auth_manager = AuthManager(settings)
 
 # Single instance for endpoints to use (dependency injection manually)
@@ -223,8 +156,8 @@ qdrant_service = QdrantService(lifecycle)
 qdrant_adapter = QdrantAdapter(lifecycle, settings.qdrant_collection)
 
 
-class SupportAgent:
-    """Aggregator that keeps references to the main services used by routes."""
+class ChatAgent:
+    """Aggregator that holds the shared service singletons used by route handlers."""
 
     def __init__(self):
         self.parser = parser_service
@@ -235,7 +168,7 @@ class SupportAgent:
         self.ai_manager = AIManager(self.settings, self.embedding) # Re-instantiate or we could have moved single instance to ai.py
 
 # Single global agent
-support_agent = SupportAgent()
+chat_agent = ChatAgent()
 
 
 @app.route('/health')
@@ -841,7 +774,7 @@ async def search():
                 context_parts = [f"Source ({r['filename']}): {r['chunk_text']}" for r in top]
                 context = "\n\n".join(context_parts)
 
-                cleaned, source_indicator = await support_agent.ai_manager.ask_agent_with_context(query, context, conversation_history=[], images=images)
+                cleaned, source_indicator = await chat_agent.ai_manager.ask_agent_with_context(query, context, conversation_history=[], images=images)
 
                 if cleaned == "__CONTENT_FILTER_BLOCKED__":
                     answer = "Content blocked by safety filters."

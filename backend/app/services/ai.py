@@ -11,9 +11,9 @@ except ImportError:
     genai_types = None
 
 try:
-    from .prompt import SYSTEM_PROMPT, SOURCE_TO_INDICATOR, SupportAnswer
+    from .prompt import SYSTEM_PROMPT, SOURCE_TO_INDICATOR, ChatAnswer
 except ImportError:
-    from prompt import SYSTEM_PROMPT, SOURCE_TO_INDICATOR, SupportAnswer
+    from prompt import SYSTEM_PROMPT, SOURCE_TO_INDICATOR, ChatAnswer
 
 try:
     from backend.app.config import settings
@@ -48,7 +48,7 @@ class AIManager:
         self.last_cached_tokens: int = 0  # Gemini does not expose this; kept for metric compatibility
         self.fallback_invocation_count: int = 0
         # Pydantic class — google-genai converts to Gemini's schema format internally.
-        self._response_schema = SupportAnswer
+        self._response_schema = ChatAnswer
 
     def initialize_client(self) -> None:
         if self._client is not None:
@@ -254,17 +254,61 @@ class AIManager:
                 try:
                     obj = json.loads(candidate[start:end + 1])
                 except Exception:
-                    # f-string so output is visible even if logger formatter does not interpolate args.
-                    logger.warning(f"Structured output JSON parse failed (raw len={len(raw)}): {raw[:400]!r}")
-                    return raw.strip(), None
+                    return self._recover_truncated_answer(raw)
             else:
-                logger.warning(f"Structured output JSON parse failed (raw len={len(raw)}): {raw[:400]!r}")
-                return raw.strip(), None
+                return self._recover_truncated_answer(raw)
 
         answer = (obj.get("answer_markdown") or "").strip()
         source = obj.get("source") or "general_knowledge"
         indicator = SOURCE_TO_INDICATOR.get(source, 1)
         return answer, indicator
+
+    def _recover_truncated_answer(self, raw: str) -> Tuple[str, Optional[int]]:
+        """Salvage answer_markdown from a truncated/incomplete JSON response.
+
+        Gemini sometimes hits max_output_tokens mid-string, producing JSON that
+        json.loads cannot parse. Rather than dump raw JSON into the UI, extract
+        the answer_markdown value byte-by-byte respecting JSON escape rules.
+        """
+        import re
+        logger.warning(f"Structured output JSON parse failed (raw len={len(raw)}): {raw[:400]!r}")
+
+        m = re.search(r'"answer_markdown"\s*:\s*"', raw)
+        if not m:
+            return raw.strip(), None
+
+        i = m.end()
+        out_chars = []
+        n = len(raw)
+        while i < n:
+            ch = raw[i]
+            if ch == '\\' and i + 1 < n:
+                nxt = raw[i + 1]
+                escapes = {'n': '\n', 't': '\t', 'r': '\r', '"': '"', '\\': '\\', '/': '/'}
+                if nxt in escapes:
+                    out_chars.append(escapes[nxt])
+                    i += 2
+                    continue
+                if nxt == 'u' and i + 5 < n:
+                    try:
+                        out_chars.append(chr(int(raw[i + 2:i + 6], 16)))
+                        i += 6
+                        continue
+                    except Exception:
+                        pass
+                out_chars.append(nxt)
+                i += 2
+                continue
+            if ch == '"':
+                break
+            out_chars.append(ch)
+            i += 1
+
+        recovered = ''.join(out_chars).strip()
+        if recovered:
+            recovered += '\n\n_(svar blev afkortet — overvej at omformulere spørgsmålet for et kortere svar)_'
+            return recovered, 1
+        return raw.strip(), None
 
 
 class DemoLLM:

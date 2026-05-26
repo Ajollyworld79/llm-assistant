@@ -8,6 +8,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 </head>
 <body>
     <button class="menu-toggle" aria-label="Open menu" onclick="toggleSidebar()">
@@ -65,7 +67,7 @@
                     <div class="chat-history" id="chat-history">
                         <!-- Welcome message -->
                         <div class="message bot">
-                            <div class="message-label">AI Assistant</div>
+                            <div class="message-label">Chat</div>
                             <div class="msg-bubble">{{ welcome_prompt|trim }}</div>
                         </div>
                     </div>
@@ -362,42 +364,53 @@
             }
         }
 
+        function renderBubbleContent(type, text) {
+            // User messages: escape only, keep simple. Bot messages: render Markdown safely.
+            if (!text) return '';
+            if (type === 'user') return escapeHtml(text);
+            try {
+                const html = marked.parse(String(text), { breaks: true, gfm: true });
+                return DOMPurify.sanitize(html);
+            } catch (e) {
+                console.warn('Markdown render failed, falling back to plain text', e);
+                return escapeHtml(text);
+            }
+        }
+
         function addMessage(type, text, results = null) {
             const history = document.getElementById('chat-history');
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${type}`;
-            
-            let contentHtml = `<div class="msg-bubble">${escapeHtml(text)}</div>`;
-            
+
+            let contentHtml = `<div class="msg-bubble">${renderBubbleContent(type, text)}</div>`;
+
             if (results && results.length > 0) {
                 const cardsHtml = results.map(r => {
                     const scoreClass = r.score > 0.8 ? 'match-high' : (r.score > 0.6 ? 'match-med' : '');
                     return `
-                    <div class="result-card" onclick="viewDocument('${r.filename}')">
+                    <div class="result-card" onclick="viewDocument('${escapeHtml(r.filename)}')">
                         <div class="result-header">
-                            <span>📄 ${r.filename}</span>
+                            <span>📄 ${escapeHtml(r.filename)}</span>
                             <span class="score-badge ${scoreClass}">${(r.score * 100).toFixed(0)}% Match</span>
                         </div>
-                        <div class="result-text">"${r.chunk_text}"</div>
+                        <div class="result-text">"${escapeHtml(r.chunk_text)}"</div>
                     </div>`;
                 }).join('');
                 contentHtml += `<div class="results-grid">${cardsHtml}</div>`;
-            } else if (results && results.length === 0) {
-                 contentHtml += `<div class="msg-bubble" style="background:#f1f5f9; color:#64748b; margin-top:0.5rem; font-size:0.9rem">No relevant documents found.</div>`;
             }
 
             msgDiv.innerHTML = `
-                <div class="message-label">${type === 'user' ? 'You' : 'AI Assistant'}</div>
+                <div class="message-label">${type === 'user' ? 'You' : 'Chat'}</div>
                 ${contentHtml}
             `;
-            
+
             history.appendChild(msgDiv);
             history.scrollTop = history.scrollHeight;
         }
 
         function escapeHtml(text) {
             if (!text) return '';
-            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
         // --- Admin / Upload Logic ---
