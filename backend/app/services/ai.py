@@ -255,15 +255,35 @@ class AIManager:
     def _parse_structured_response(self, raw: str) -> Tuple[str, Optional[int]]:
         if not raw:
             return raw, None
+
+        candidate = raw.strip()
+        # Gemini occasionally wraps JSON in ```json ... ``` fences despite response_mime_type.
+        if candidate.startswith("```"):
+            candidate = candidate.strip("`")
+            if candidate.lower().startswith("json"):
+                candidate = candidate[4:]
+            candidate = candidate.strip()
+
         try:
-            obj = json.loads(raw)
-            answer = (obj.get("answer_markdown") or "").strip()
-            source = obj.get("source") or "general_knowledge"
-            indicator = SOURCE_TO_INDICATOR.get(source, 1)
-            return answer, indicator
-        except Exception as e:
-            logger.warning("Structured output JSON parse failed: %s — returning raw", e)
-            return raw.strip(), None
+            obj = json.loads(candidate)
+        except Exception:
+            # Last-ditch: try to find the first {...} block inside the text.
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    obj = json.loads(candidate[start:end + 1])
+                except Exception as e:
+                    logger.warning("Structured output JSON parse failed (raw len=%d): %r", len(raw), raw[:200])
+                    return raw.strip(), None
+            else:
+                logger.warning("Structured output JSON parse failed (raw len=%d): %r", len(raw), raw[:200])
+                return raw.strip(), None
+
+        answer = (obj.get("answer_markdown") or "").strip()
+        source = obj.get("source") or "general_knowledge"
+        indicator = SOURCE_TO_INDICATOR.get(source, 1)
+        return answer, indicator
 
 
 class DemoLLM:
