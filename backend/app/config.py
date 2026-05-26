@@ -29,11 +29,14 @@ class Settings:
             or os.getenv('gemini_api_key')
             or os.getenv('GOOGLE_API_KEY')
         )
+        # Primary: gemini-2.5-flash (stable, free, 10 RPM / 250 RPD).
+        # Fallback: gemini-2.5-flash-lite (stable, free, 15 RPM / 1000 RPD).
+        # NOTE: gemini-2.0-flash was retired March 3, 2026 — do not use as default.
         self.gemini_model = os.getenv('GEMINI_MODEL') or os.getenv('gemini_model') or 'gemini-2.5-flash'
         self.gemini_model_fallback = (
             os.getenv('GEMINI_MODEL_FALLBACK')
             or os.getenv('gemini_model_fallback')
-            or 'gemini-2.0-flash'
+            or 'gemini-2.5-flash-lite'
         )
 
         # Admin token for protecting upload/reset endpoints

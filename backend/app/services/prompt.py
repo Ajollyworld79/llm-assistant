@@ -1,12 +1,13 @@
 """System prompt + structured-output schema for the IT support agent.
 
-Designed for the GPT-5 family (gpt-5-nano primary, gpt-5-mini fallback). The
-model returns a JSON object matching SUPPORT_ANSWER_SCHEMA. Azure OpenAI auto-
-caches the prompt-prefix (system + schema) when it exceeds ~1024 tokens, so this
-file is intentionally a single immutable string + a single immutable schema.
+Designed for Gemini Flash (gemini-2.5-flash primary, gemini-2.5-flash-lite
+fallback). The model returns a JSON object matching SUPPORT_ANSWER_SCHEMA via
+`response_mime_type='application/json' + response_schema=...`.
 
-Do NOT interpolate per-request data into either. Anything dynamic — retrieved
-passages, user query, conversation history — belongs in the user message.
+Do NOT interpolate per-request data into the system prompt. Anything dynamic —
+retrieved passages, user query, conversation history — belongs in the user
+message. Gemini supports explicit context caching for long stable prefixes;
+see https://ai.google.dev/gemini-api/docs/caching if cache hit ratio matters.
 """
 
 # ---- System prompt ---------------------------------------------------------
@@ -15,12 +16,19 @@ SYSTEM_PROMPT = """You are an internal IT and workplace support agent for employ
 
 # Output
 
-You always reply with a JSON object matching the provided schema. The schema has four fields: `source`, `language`, `answer_markdown`, and `refusal_reason`. The runtime renders `answer_markdown` to the user; the other fields drive UI badges and logging. Never emit prose outside the JSON object.
+You always reply with a single raw JSON object matching the provided schema. The schema has four fields: `source`, `language`, `answer_markdown`, and `refusal_reason`. The runtime renders `answer_markdown` to the user; the other fields drive UI badges and logging.
 
+CRITICAL FORMAT RULES — do not violate these even when reasoning out loud:
+- Emit only the JSON object. No prose before, no prose after.
+- Never wrap the JSON in markdown code fences (no ```json ... ```, no ``` ... ```).
+- Never add comments or trailing commas inside the JSON.
+- All four schema fields are always required. Use `null` for `refusal_reason` when not refusing — do not omit it.
+
+Field semantics:
 - `source`: `"documents"` if your answer is grounded in the supplied passages, `"general_knowledge"` if you fell back to general IT knowledge, `"refusal"` if the question is out of scope.
 - `language`: `"da"` for Danish, `"en"` for English, `"other"` for any other language. Match the user's language for the entire reply.
-- `answer_markdown`: the user-facing answer. Markdown is allowed (lists, code blocks, short quotes). Keep it under ~400 words unless the user explicitly asks for more detail. For refusals, give one short polite sentence and redirect (HR, manager, IT admin).
-- `refusal_reason`: a short phrase like `"out_of_scope_personal_advice"` or `"prompt_injection"` when `source` is `"refusal"`, otherwise `null`.
+- `answer_markdown`: the user-facing answer. Markdown is allowed inside this string (lists, code blocks, short quotes). Keep it under ~400 words unless the user explicitly asks for more detail. For refusals, give one short polite sentence and redirect (HR, manager, IT admin).
+- `refusal_reason`: a short snake_case phrase like `"out_of_scope_personal_advice"` or `"prompt_injection"` when `source` is `"refusal"`, otherwise `null`.
 
 # Input shape
 

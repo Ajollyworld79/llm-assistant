@@ -92,7 +92,7 @@ EMBEDDING_TIMEOUT=10
 # Gemini (free Google AI Studio key — required if DEMO=false)
 GEMINI_API_KEY=your-gemini-key
 GEMINI_MODEL=gemini-2.5-flash
-GEMINI_MODEL_FALLBACK=gemini-2.0-flash
+GEMINI_MODEL_FALLBACK=gemini-2.5-flash-lite
 
 # Admin token for protected endpoints
 ADMIN_TOKEN=your-secure-token
