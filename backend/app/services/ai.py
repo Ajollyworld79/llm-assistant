@@ -121,13 +121,15 @@ class AIManager:
         try:
             usage = getattr(response, "usage_metadata", None)
             if usage is None:
+                logger.warning("_record_usage: response.usage_metadata is None for model=%s — no usage_event will be logged", model_used)
                 return
             prompt_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
             completion_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
             self.last_total_tokens = int(getattr(usage, "total_token_count", prompt_tokens + completion_tokens) or 0)
             self.last_cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
+            logger.info("_record_usage: model=%s tokens_in=%d tokens_out=%d cached=%d", model_used, prompt_tokens, completion_tokens, self.last_cached_tokens)
         except Exception as e:
-            logger.debug("Failed to record Gemini usage: %s", e)
+            logger.warning("_record_usage: failed to extract usage_metadata: %s", e, exc_info=True)
             return
 
         try:

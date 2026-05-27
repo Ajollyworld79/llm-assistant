@@ -95,7 +95,15 @@ def _init_fastembed_model() -> "TextEmbedding":
 
 
 async def preload_embedding_models() -> None:
-    """Load the fastembed model and run a warm-up embed at startup."""
+    """Load the fastembed model and run a warm-up embed at startup.
+
+    Skipped entirely when EMBEDDING_PROVIDER is not 'fastembed' — no point
+    loading a 120MB ONNX model when Gemini/Azure provide embeddings.
+    """
+    provider = (getattr(settings, 'embedding_provider', '') or '').strip().lower()
+    if provider not in ('fastembed', 'fast', 'fe'):
+        logger.info("Skipping fastembed preload (EMBEDDING_PROVIDER=%s)", provider or '<unset>')
+        return
     if not HAS_FASTEMBED:
         logger.warning('fastembed not available; embeddings will use deterministic fallback')
         return
