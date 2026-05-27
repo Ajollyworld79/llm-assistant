@@ -25,30 +25,37 @@ from functools import wraps
 
 try:
     from .config import settings
-    import embeddings as embeddings
     from .module.middleware import setup_middleware
     from .module.lifecycle import lifecycle
     from .module.apimonitor import monitor
     from .module.crypto import encrypt_text, decrypt_text
     from .module.demo_lock import reject_if_locked
     from .module.usage_db import usage_db
+    try:
+        from .module.garbage_collection import gc_manager
+    except Exception:
+        gc_manager = None
 except ImportError:
+    # Fallback for non-packaged execution. NOTE: this branch loads modules at
+    # top-level paths (e.g. ``module.lifecycle``) which Python treats as a
+    # different module from the relative form (``backend.app.module.lifecycle``)
+    # used by sibling routes. Mixing the two creates duplicate singletons —
+    # avoid hitting this branch in production by running under uvicorn with
+    # ``backend.app.main:app`` so the try branch above succeeds.
     import os, sys
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     if APP_DIR not in sys.path:
         sys.path.insert(0, APP_DIR)
     import config as config_mod
     settings = config_mod.settings
-    import embeddings as embeddings
     from module.middleware import setup_middleware
     from module.lifecycle import lifecycle
     from module.apimonitor import monitor
     from module.crypto import encrypt_text, decrypt_text
     from module.demo_lock import reject_if_locked
     from module.usage_db import usage_db
-    # Garbage collection manager (optional psutil dependency)
     try:
-        from .module.garbage_collection import gc_manager
+        from module.garbage_collection import gc_manager
     except Exception:
         gc_manager = None
 
