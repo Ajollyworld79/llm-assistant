@@ -17,8 +17,10 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='se
 
 COPY backend/ ./backend/
 
-# Persistent Qdrant volume gets seeded from any local data shipped with the repo
-COPY local_qdrant_db/ ./qdrant_data/
+# Qdrant data directory — created empty in the image. On Railway, mount a
+# persistent volume here (or set QDRANT_URL for remote Qdrant) so data survives
+# redeploys. No DB files are shipped from the repo.
+RUN mkdir -p /app/qdrant_data
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8002
