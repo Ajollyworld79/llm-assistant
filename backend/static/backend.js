@@ -195,6 +195,12 @@ async function pollConnections() {
             embedding_model: ['loaded', 'configured'],
             logger: ['writing', 'stdout_only'],
             usage_db: ['up', 'memory_fallback'],
+            chat_db: ['up', 'memory_fallback'],
+        };
+        const labels = {
+            chat_db: 'Chat DB',
+            usage_db: 'Usage DB',
+            embedding_model: 'Embedding',
         };
         Object.entries(c).forEach(([key, val]) => {
             const span = document.querySelector(`[data-conn="${key}"]`);
@@ -202,8 +208,9 @@ async function pollConnections() {
             const accepted = okStatuses[key] || ['up'];
             const good = accepted.includes(val.status);
             const dot = good ? '🟢' : '🔴';
-            const label = key.replace('_', ' ');
-            span.textContent = `${dot} ${label}`;
+            const label = labels[key] || key.replace(/_/g, ' ');
+            const suffix = (key === 'chat_db' && val.count != null) ? ` (${val.count})` : '';
+            span.textContent = `${dot} ${label}${suffix}`;
         });
         // Tile dots
         setDot('tile-qdrant-dot', c.qdrant?.status === 'up' ? 'green' : 'red');

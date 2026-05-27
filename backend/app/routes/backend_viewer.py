@@ -172,6 +172,27 @@ async def api_connections():
         "last_check_at": now_iso,
     }
 
+    # Chat DB — same postgres pool, but report row count from chat_events so
+    # the operator can confirm conversations are persisting.
+    chat_count = None
+    if usage_db.backend_kind == "postgres":
+        try:
+            async with usage_db._pool.acquire() as conn:  # type: ignore
+                chat_count = int(await conn.fetchval("SELECT count(*) FROM chat_events"))
+        except Exception:
+            chat_count = None
+    else:
+        try:
+            chat_count = len(usage_db._mem_chats)
+        except Exception:
+            chat_count = None
+    out["chat_db"] = {
+        "status": "up" if usage_db.backend_kind == "postgres" else "memory_fallback",
+        "backend": usage_db.backend_kind,
+        "count": chat_count,
+        "last_check_at": now_iso,
+    }
+
     return jsonify(out)
 
 

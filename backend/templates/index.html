@@ -81,7 +81,7 @@
                                     <span>Hvilke projekter har Gustav bygget?</span>
                                     <span class="sug-arrow">→</span>
                                 </button>
-                                <button type="button" class="suggestion" onclick="askSuggestion('What is in Gustav&#39;s CV?')">
+                                <button type="button" class="suggestion" onclick="askSuggestion('What is in Gustav's CV?')">
                                     <span class="sug-dot"></span>
                                     <span>What is in Gustav's CV?</span>
                                     <span class="sug-arrow">→</span>
@@ -95,6 +95,7 @@
                         </section>
                     </div>
 
+                    <div id="chat-attachments" class="chat-attachments" hidden></div>
                     <div class="input-area">
                         <textarea id="query-input" placeholder="Ask anything…" onkeypress="handleKeyPress(event)"></textarea>
                         <input type="file" id="chat-file-input" multiple style="display:none"
@@ -117,7 +118,6 @@
                             Send
                         </button>
                     </div>
-                    <div id="chat-attachments" class="chat-attachments" hidden></div>
                 </div>
             </div>
 
