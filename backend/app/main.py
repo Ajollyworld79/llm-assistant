@@ -149,6 +149,30 @@ class AuthManager:
 
         return decorated_function
 
+    def require_search_token(self, f):
+        """Gate /search behind SEARCH_API_TOKEN when configured.
+
+        Open by default (backward compat for dev / local). Once SEARCH_API_TOKEN
+        is set in the environment, every request must carry a matching Bearer
+        token. The admin_token is also accepted so admin tools keep working.
+        """
+        @wraps(f)
+        async def decorated_function(*args, **kwargs):
+            search_token = getattr(self.settings, 'search_api_token', None)
+            if not search_token:
+                # Not configured — endpoint stays open.
+                return await f(*args, **kwargs)
+            auth = request.headers.get('Authorization', '')
+            if not auth.startswith('Bearer '):
+                return jsonify({'error': 'unauthorized'}), 401
+            token = auth.split(' ', 1)[1].strip()
+            admin_token = getattr(self.settings, 'admin_token', None) or ''
+            if token != search_token and token != admin_token:
+                return jsonify({'error': 'unauthorized'}), 401
+            return await f(*args, **kwargs)
+
+        return decorated_function
+
 # Instantiate helpers
 auth_manager = AuthManager(settings)
 
@@ -657,6 +681,7 @@ async def get_document(doc_id):
 
 
 @app.route('/search', methods=['POST'])
+@auth_manager.require_search_token
 async def search():
     request_id = monitor.start_request('/search', 'POST')
     payload = await request.get_json()

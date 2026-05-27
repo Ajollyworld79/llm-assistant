@@ -45,6 +45,10 @@ class Settings:
 
         # Admin token for protecting upload/reset endpoints
         self.admin_token = os.getenv('ADMIN_TOKEN') or None
+        # Optional consumer token for protecting /search (least-privilege: separate
+        # from admin_token so a leaked search key cannot delete data). Leave unset
+        # to keep /search open for local dev and other clients.
+        self.search_api_token = os.getenv('SEARCH_API_TOKEN') or None
 
         # Search configuration
         self.TOP_K_RESULTS = int(os.getenv('TOP_K_RESULTS', '5'))
