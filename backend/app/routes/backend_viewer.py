@@ -58,7 +58,9 @@ _START_TIME = time.time()
 
 @backend_bp.get('/')
 async def index():
-    return await render_template('backend.html', locked=demo_is_locked())
+    # Use container start time as a cache-bust query so JS/CSS reload after
+    # every deploy without users needing to hard-refresh.
+    return await render_template('backend.html', locked=demo_is_locked(), asset_v=int(_START_TIME))
 
 
 @backend_bp.get('/api/system')

@@ -830,6 +830,13 @@ async def search():
     monitor.end_request(request_id, success=True)
 
     total_ms = int((time.perf_counter() - t_request_start) * 1000)
+    # Pull token counts from the AI manager's last call (if Gemini was used)
+    last_model = getattr(chat_agent.ai_manager, 'last_used_model', None) or (
+        getattr(settings, 'gemini_model', None) or ('demo' if settings.demo else '')
+    )
+    last_tokens_total = int(getattr(chat_agent.ai_manager, 'last_total_tokens', 0) or 0)
+    last_cached = int(getattr(chat_agent.ai_manager, 'last_cached_tokens', 0) or 0)
+
     try:
         usage_db.log_chat(
             thread_id=thread_id,
@@ -838,13 +845,30 @@ async def search():
             embed_ms=embed_ms_total,
             ai_ms=ai_ms_total,
             total_ms=total_ms,
-            model=getattr(settings, 'gemini_model', None) or ('demo' if settings.demo else ''),
-            tokens_input=0,
+            model=last_model,
+            tokens_input=last_tokens_total,
             tokens_output=0,
             doc_count=len(top) if 'top' in locals() else 0,
         )
-    except Exception:
-        logger.debug("usage_db.log_chat failed", exc_info=True)
+    except Exception as e:
+        logger.warning("usage_db.log_chat failed: %s", e, exc_info=True)
+
+    # Also log a usage_event independently so the Usage History tab fills even
+    # if ai.py's _record_usage path misses (e.g., no usage_metadata on fallback).
+    try:
+        usage_db.log_event(
+            session_id=None,
+            endpoint="/search",
+            model=last_model,
+            tokens_input=last_tokens_total,
+            tokens_output=0,
+            tokens_cached=last_cached,
+            latency_ms=total_ms,
+            status_code=200,
+            error_kind=None,
+        )
+    except Exception as e:
+        logger.warning("usage_db.log_event from /search failed: %s", e, exc_info=True)
 
     return jsonify({
         "results": top,
