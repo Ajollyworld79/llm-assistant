@@ -142,7 +142,7 @@ class UsageDB:
                     record["latency_ms"], record["status_code"], record["error_kind"],
                 )
         except Exception as e:
-            logger.debug("usage_events insert failed: %s", e)
+            logger.warning("usage_events insert failed: %s", e, exc_info=True)
 
     def log_chat(self, *, thread_id: Optional[str], query: str, answer: str,
                  embed_ms: int = 0, ai_ms: int = 0, total_ms: int = 0,
@@ -183,7 +183,7 @@ class UsageDB:
                     record["doc_count"],
                 )
         except Exception as e:
-            logger.debug("chat_events insert failed: %s", e)
+            logger.warning("chat_events insert failed: %s", e, exc_info=True)
 
     async def list_chats(self, limit: int = 200) -> List[Dict[str, Any]]:
         """Return chat events newest-first as JSON-serializable dicts."""
@@ -214,7 +214,7 @@ class UsageDB:
                         "doc_count": r["doc_count"],
                     } for r in rows]
             except Exception as e:
-                logger.debug("chat_events list query failed: %s", e)
+                logger.warning("chat_events list query failed: %s", e, exc_info=True)
                 return []
         # Memory fallback — newest first
         out = []

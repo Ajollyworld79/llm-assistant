@@ -166,7 +166,7 @@ class AIManager:
                 error_kind="fallback" if is_fallback else None,
             )
         except Exception as e:
-            logger.debug("Failed to log usage event: %s", e)
+            logger.warning("Failed to log usage event: %s", e, exc_info=True)
 
     async def ask_agent_with_context(self, query: str, context: str,
                                      conversation_history: Optional[list] = None,

@@ -136,9 +136,16 @@ async def api_connections():
     }
 
     # Postgres usage DB
+    db_url_set = bool(os.getenv('DATABASE_URL'))
+    try:
+        from ..module.usage_db import HAS_ASYNCPG
+    except ImportError:
+        from module.usage_db import HAS_ASYNCPG  # type: ignore
     out["usage_db"] = {
         "status": "up" if usage_db.backend_kind == "postgres" else "memory_fallback",
         "backend": usage_db.backend_kind,
+        "database_url_set": db_url_set,
+        "asyncpg_available": HAS_ASYNCPG,
         "last_check_at": now_iso,
     }
 
