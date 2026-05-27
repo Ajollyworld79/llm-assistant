@@ -225,6 +225,16 @@
         let adminToken = localStorage.getItem('admin_token') || '';
         document.getElementById('token-input').value = adminToken;
 
+        function getThreadId() {
+            let t = localStorage.getItem('chat_thread_id');
+            if (!t) {
+                t = (crypto && crypto.randomUUID) ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+                    : (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+                localStorage.setItem('chat_thread_id', t);
+            }
+            return t;
+        }
+
         // Init
         checkHealth();
         
@@ -365,7 +375,7 @@
                     }
                 }
 
-                const body = { query: query || 'Please analyze the attached content.', top_k: 4 };
+                const body = { query: query || 'Please analyze the attached content.', top_k: 4, thread_id: getThreadId() };
                 if (imagePayload.length > 0) body.images = imagePayload;
 
                 const res = await fetch(BASE + '/search', {
@@ -473,7 +483,11 @@
 
         async function uploadFiles() {
             if (currentFiles.length === 0) return;
-            
+            if (!adminToken) {
+                showToast("Admin token required to upload documents.", false);
+                return;
+            }
+
             const btn = document.getElementById('upload-btn');
             const progress = document.getElementById('upload-progress');
             btn.disabled = true;
@@ -537,8 +551,12 @@
         }
 
         async function clearDocs(e, btnEl) {
+            if (!adminToken) {
+                showToast("Admin token required to clear documents.", false);
+                return;
+            }
             if (!confirm('Are you sure you want to delete ALL documents? This cannot be undone.')) return;
-            
+
             const headers = {};
             if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
             

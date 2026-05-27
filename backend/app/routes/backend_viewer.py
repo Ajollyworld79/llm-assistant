@@ -87,7 +87,10 @@ async def api_connections():
     now_iso = _now_iso()
     out: Dict[str, Any] = {}
 
-    # Qdrant
+    # Qdrant — connection state is determined by client presence; a failing
+    # count() call does not mean the service is down (collection may not exist
+    # yet, or the call may transiently fail) so we keep status as "up" and
+    # simply leave points_count as None in that case.
     qdrant_ok = lifecycle.qdrant_client is not None
     points_count = None
     if qdrant_ok:
@@ -98,7 +101,7 @@ async def api_connections():
             )
             points_count = getattr(count_obj, 'count', None)
         except Exception:
-            qdrant_ok = False
+            points_count = None
     out["qdrant"] = {
         "status": "up" if qdrant_ok else "down",
         "points_count": points_count,
@@ -211,6 +214,47 @@ async def api_usage_timeseries():
         return jsonify({"error": "invalid_range"}), 400
     series = await usage_db.query_timeseries(metric, range_label)
     return jsonify({"metric": metric, "range": range_label, "series": series})
+
+
+def _require_admin_token() -> bool:
+    """Return True if request is authorized to mutate. When admin_token is unset
+    (e.g. local dev), no auth is required."""
+    expected = getattr(settings, 'admin_token', None)
+    if not expected:
+        return True
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return False
+    return auth.split(' ', 1)[1].strip() == expected
+
+
+@backend_bp.get('/api/conversations')
+async def api_conversations_list():
+    """List recent chat exchanges. Read-only — no auth required."""
+    try:
+        limit = int(request.args.get('limit', 200))
+    except (TypeError, ValueError):
+        limit = 200
+    items = await usage_db.list_chats(limit=limit)
+    return jsonify({"items": items, "backend": usage_db.backend_kind})
+
+
+@backend_bp.delete('/api/conversations')
+async def api_conversations_clear():
+    """Delete ALL chat exchanges. Admin-gated when admin_token is configured."""
+    if not _require_admin_token():
+        return jsonify({"error": "unauthorized"}), 401
+    deleted = await usage_db.delete_all_chats()
+    return jsonify({"deleted": deleted})
+
+
+@backend_bp.delete('/api/conversations/<int:chat_id>')
+async def api_conversations_delete(chat_id: int):
+    """Delete a single chat exchange by id. Admin-gated when configured."""
+    if not _require_admin_token():
+        return jsonify({"error": "unauthorized"}), 401
+    ok = await usage_db.delete_chat(chat_id)
+    return jsonify({"deleted": 1 if ok else 0})
 
 
 # ---- helpers --------------------------------------------------------------

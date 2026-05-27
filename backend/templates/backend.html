@@ -35,6 +35,7 @@
         <button class="bk-tab" data-tab="models" onclick="setTab('models')">Models</button>
         <button class="bk-tab" data-tab="prompt" onclick="setTab('prompt')">Prompt Playground</button>
         <button class="bk-tab" data-tab="usage" onclick="setTab('usage')">Usage History</button>
+        <button class="bk-tab" data-tab="conversations" onclick="setTab('conversations')">Conversations</button>
     </nav>
 </div>
 
@@ -174,6 +175,41 @@
         <div class="chart-card"><h4>Tokens / hour (24h)</h4><div class="chart-canvas-wrap"><canvas id="chart-tokens"></canvas></div></div>
         <div class="chart-card"><h4>Cache hit % (7d)</h4><div class="chart-canvas-wrap"><canvas id="chart-cache"></canvas></div></div>
         <div class="chart-card"><h4>Fallback rate % (7d)</h4><div class="chart-canvas-wrap"><canvas id="chart-fallback"></canvas></div></div>
+    </div>
+</section>
+
+<!-- ====== TAB: CONVERSATIONS ====== -->
+<section class="bk-tab-panel" id="tab-conversations" hidden>
+    <div class="conv-header">
+        <div>
+            <h2>Conversations</h2>
+            <p class="bk-help">Recent chat exchanges. Backend: <span id="conv-backend">—</span>. <span id="conv-auth-note"></span></p>
+        </div>
+        <div class="conv-actions">
+            <button id="conv-refresh-btn" class="model-apply" onclick="refreshConversations()" style="opacity:1">Refresh</button>
+            <button id="conv-clear-btn" class="model-apply" onclick="clearAllConversations()" style="opacity:1; background:#b91c1c; color:#fff">Delete all</button>
+        </div>
+    </div>
+    <div class="conv-table-wrap">
+        <table class="conv-table" id="conv-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Thread</th>
+                    <th>Question</th>
+                    <th>Answer</th>
+                    <th>Embed</th>
+                    <th>AI</th>
+                    <th>Total</th>
+                    <th>Docs</th>
+                    <th>Model</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="conv-tbody">
+                <tr><td colspan="10" style="padding:1rem; text-align:center; color:#888">Loading…</td></tr>
+            </tbody>
+        </table>
     </div>
 </section>
 

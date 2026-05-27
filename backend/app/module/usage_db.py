@@ -43,6 +43,23 @@ CREATE TABLE IF NOT EXISTS usage_events (
     error_kind    TEXT
 );
 CREATE INDEX IF NOT EXISTS usage_events_ts_idx ON usage_events (ts);
+
+CREATE TABLE IF NOT EXISTS chat_events (
+    id            BIGSERIAL PRIMARY KEY,
+    ts            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    thread_id     TEXT,
+    query         TEXT,
+    answer        TEXT,
+    embed_ms      INTEGER DEFAULT 0,
+    ai_ms         INTEGER DEFAULT 0,
+    total_ms      INTEGER DEFAULT 0,
+    model         TEXT,
+    tokens_input  INTEGER DEFAULT 0,
+    tokens_output INTEGER DEFAULT 0,
+    doc_count     INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS chat_events_ts_idx ON chat_events (ts);
+CREATE INDEX IF NOT EXISTS chat_events_thread_idx ON chat_events (thread_id);
 """
 
 
@@ -51,6 +68,8 @@ class UsageDB:
         self._pool: Optional[Any] = None
         self._database_url: Optional[str] = os.getenv('DATABASE_URL')
         self._mem_events: deque = deque(maxlen=5000)
+        self._mem_chats: deque = deque(maxlen=2000)
+        self._mem_chat_seq: int = 0
         self._initialized = False
 
     @property
@@ -124,6 +143,129 @@ class UsageDB:
                 )
         except Exception as e:
             logger.debug("usage_events insert failed: %s", e)
+
+    def log_chat(self, *, thread_id: Optional[str], query: str, answer: str,
+                 embed_ms: int = 0, ai_ms: int = 0, total_ms: int = 0,
+                 model: Optional[str] = None, tokens_input: int = 0,
+                 tokens_output: int = 0, doc_count: int = 0) -> None:
+        """Fire-and-forget insert of a chat exchange. Never raises."""
+        record = {
+            "ts": datetime.datetime.now(datetime.timezone.utc),
+            "thread_id": thread_id or "",
+            "query": query or "",
+            "answer": answer or "",
+            "embed_ms": int(embed_ms or 0),
+            "ai_ms": int(ai_ms or 0),
+            "total_ms": int(total_ms or 0),
+            "model": model or "",
+            "tokens_input": int(tokens_input or 0),
+            "tokens_output": int(tokens_output or 0),
+            "doc_count": int(doc_count or 0),
+        }
+        if self._pool is not None:
+            asyncio.create_task(self._insert_chat_pg(record))
+        else:
+            self._mem_chat_seq += 1
+            record["id"] = self._mem_chat_seq
+            self._mem_chats.append(record)
+
+    async def _insert_chat_pg(self, record: Dict[str, Any]) -> None:
+        try:
+            async with self._pool.acquire() as conn:  # type: ignore
+                await conn.execute(
+                    """INSERT INTO chat_events
+                       (ts, thread_id, query, answer, embed_ms, ai_ms, total_ms,
+                        model, tokens_input, tokens_output, doc_count)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
+                    record["ts"], record["thread_id"], record["query"], record["answer"],
+                    record["embed_ms"], record["ai_ms"], record["total_ms"],
+                    record["model"], record["tokens_input"], record["tokens_output"],
+                    record["doc_count"],
+                )
+        except Exception as e:
+            logger.debug("chat_events insert failed: %s", e)
+
+    async def list_chats(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Return chat events newest-first as JSON-serializable dicts."""
+        limit = max(1, min(int(limit or 200), 1000))
+        if self._pool is not None:
+            try:
+                async with self._pool.acquire() as conn:  # type: ignore
+                    rows = await conn.fetch(
+                        """SELECT id, ts, thread_id, query, answer, embed_ms, ai_ms,
+                                  total_ms, model, tokens_input, tokens_output, doc_count
+                           FROM chat_events
+                           ORDER BY id DESC
+                           LIMIT $1""",
+                        limit,
+                    )
+                    return [{
+                        "id": r["id"],
+                        "ts": r["ts"].isoformat() if r["ts"] else None,
+                        "thread_id": r["thread_id"],
+                        "query": r["query"],
+                        "answer": r["answer"],
+                        "embed_ms": r["embed_ms"],
+                        "ai_ms": r["ai_ms"],
+                        "total_ms": r["total_ms"],
+                        "model": r["model"],
+                        "tokens_input": r["tokens_input"],
+                        "tokens_output": r["tokens_output"],
+                        "doc_count": r["doc_count"],
+                    } for r in rows]
+            except Exception as e:
+                logger.debug("chat_events list query failed: %s", e)
+                return []
+        # Memory fallback — newest first
+        out = []
+        for r in list(self._mem_chats)[-limit:][::-1]:
+            out.append({
+                "id": r.get("id"),
+                "ts": r["ts"].isoformat() if isinstance(r.get("ts"), datetime.datetime) else r.get("ts"),
+                "thread_id": r.get("thread_id", ""),
+                "query": r.get("query", ""),
+                "answer": r.get("answer", ""),
+                "embed_ms": r.get("embed_ms", 0),
+                "ai_ms": r.get("ai_ms", 0),
+                "total_ms": r.get("total_ms", 0),
+                "model": r.get("model", ""),
+                "tokens_input": r.get("tokens_input", 0),
+                "tokens_output": r.get("tokens_output", 0),
+                "doc_count": r.get("doc_count", 0),
+            })
+        return out
+
+    async def delete_chat(self, chat_id: int) -> bool:
+        if self._pool is not None:
+            try:
+                async with self._pool.acquire() as conn:  # type: ignore
+                    res = await conn.execute("DELETE FROM chat_events WHERE id = $1", int(chat_id))
+                    # res is e.g. "DELETE 1"
+                    parts = res.split()
+                    return len(parts) >= 2 and parts[-1].isdigit() and int(parts[-1]) > 0
+            except Exception as e:
+                logger.debug("chat_events delete failed: %s", e)
+                return False
+        before = len(self._mem_chats)
+        self._mem_chats = deque(
+            (r for r in self._mem_chats if r.get("id") != int(chat_id)),
+            maxlen=self._mem_chats.maxlen,
+        )
+        return len(self._mem_chats) < before
+
+    async def delete_all_chats(self) -> int:
+        if self._pool is not None:
+            try:
+                async with self._pool.acquire() as conn:  # type: ignore
+                    res = await conn.execute("DELETE FROM chat_events")
+                    parts = res.split()
+                    return int(parts[-1]) if parts and parts[-1].isdigit() else 0
+            except Exception as e:
+                logger.debug("chat_events bulk delete failed: %s", e)
+                return 0
+        n = len(self._mem_chats)
+        self._mem_chats.clear()
+        return n
 
     async def query_summary(self) -> Dict[str, Any]:
         if self._pool is not None:

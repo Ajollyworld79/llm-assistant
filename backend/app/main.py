@@ -31,6 +31,7 @@ try:
     from .module.apimonitor import monitor
     from .module.crypto import encrypt_text, decrypt_text
     from .module.demo_lock import reject_if_locked
+    from .module.usage_db import usage_db
 except ImportError:
     import os, sys
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,6 +45,7 @@ except ImportError:
     from module.apimonitor import monitor
     from module.crypto import encrypt_text, decrypt_text
     from module.demo_lock import reject_if_locked
+    from module.usage_db import usage_db
     # Garbage collection manager (optional psutil dependency)
     try:
         from .module.garbage_collection import gc_manager
@@ -694,6 +696,7 @@ async def search():
     simulate_latency = payload.get('simulate_latency', True)
     filters = payload.get('filters', None) # Extract filters
     images = payload.get('images', None)  # Optional [{data_base64, mime_type}, ...] for multimodal Gemini
+    thread_id = (payload.get('thread_id') or '').strip() or uuid.uuid4().hex[:16]
 
     if not query:
         monitor.end_request(request_id, success=False, error="query is required")
@@ -701,6 +704,11 @@ async def search():
 
     if simulate_latency:
         await asyncio.sleep(random.uniform(0.05, 0.4))
+
+    # Timing accumulators for the conversations log
+    t_request_start = time.perf_counter()
+    embed_ms_total = 0
+    ai_ms_total = 0
 
     # Use QdrantService for search (which now handles filtering)
     # The new search_index method does embedding internally too, making this route simpler.
@@ -712,7 +720,9 @@ async def search():
     # If using in-memory only:
     if not lifecycle.qdrant_client:
         # manual embedding
+        _t_emb = time.perf_counter()
         q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}", is_query=True)
+        embed_ms_total += int((time.perf_counter() - _t_emb) * 1000)
         q_emb = q_embs[0]
         results = []
         for d in DOCUMENTS:
@@ -732,7 +742,9 @@ async def search():
         # Use qdrant_service helper to build filters
         query_filter = qdrant_service.build_filters(filters)
 
+        _t_emb = time.perf_counter()
         q_embs = await embedding_adapter.embed_texts([query], provider=settings.embedding_provider, context=f"search:{query[:80]}", is_query=True)
+        embed_ms_total += int((time.perf_counter() - _t_emb) * 1000)
         q_emb = q_embs[0]
 
         results = []
@@ -787,7 +799,9 @@ async def search():
                 context_parts = [f"Source ({r['filename']}): {r['chunk_text']}" for r in filtered]
                 context = "\n\n".join(context_parts)
                 demo = DemoLLM()
+                _t_ai = time.perf_counter()
                 cleaned, source_indicator = await demo.generate(query, context)
+                ai_ms_total += int((time.perf_counter() - _t_ai) * 1000)
                 answer = f"(Demo mode - no chat model available) {cleaned}"
         except Exception as e:
             logger.exception("Demo LLM failed: %s", e)
@@ -801,7 +815,9 @@ async def search():
                 context_parts = [f"Source ({r['filename']}): {r['chunk_text']}" for r in top]
                 context = "\n\n".join(context_parts)
 
+                _t_ai = time.perf_counter()
                 cleaned, source_indicator = await chat_agent.ai_manager.ask_agent_with_context(query, context, conversation_history=[], images=images)
+                ai_ms_total += int((time.perf_counter() - _t_ai) * 1000)
 
                 if cleaned == "__CONTENT_FILTER_BLOCKED__":
                     answer = "Content blocked by safety filters."
@@ -812,6 +828,24 @@ async def search():
             answer = f"Error generating answer: {str(e)}"
 
     monitor.end_request(request_id, success=True)
+
+    total_ms = int((time.perf_counter() - t_request_start) * 1000)
+    try:
+        usage_db.log_chat(
+            thread_id=thread_id,
+            query=query,
+            answer=answer or "",
+            embed_ms=embed_ms_total,
+            ai_ms=ai_ms_total,
+            total_ms=total_ms,
+            model=getattr(settings, 'gemini_model', None) or ('demo' if settings.demo else ''),
+            tokens_input=0,
+            tokens_output=0,
+            doc_count=len(top) if 'top' in locals() else 0,
+        )
+    except Exception:
+        logger.debug("usage_db.log_chat failed", exc_info=True)
+
     return jsonify({
         "results": top,
         "used_documents": [{"doc_id": r.get("doc_id"), "filename": r.get("filename"), "score": r.get("score"), "chunk_text": r.get("chunk_text")} for r in top],
@@ -819,7 +853,11 @@ async def search():
         "message": DEMO_BANNER if settings.demo else "",
         "answer": answer,
         "sources": list(unique_files) if 'unique_files' in locals() else [],
-        "embedding_provider": getattr(settings, "embedding_provider", None)
+        "embedding_provider": getattr(settings, "embedding_provider", None),
+        "thread_id": thread_id,
+        "embed_ms": embed_ms_total,
+        "ai_ms": ai_ms_total,
+        "total_ms": total_ms,
     })
 
 

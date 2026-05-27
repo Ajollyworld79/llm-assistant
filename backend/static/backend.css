@@ -547,3 +547,22 @@ section.bk-tab-panel > h2 {
     .metric-big { border-right: none; }
     .backend-title h1 { font-size: 1.5rem; }
 }
+
+/* ---------- Conversations tab ---------- */
+.conv-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; }
+.conv-actions { display: flex; gap: 0.5rem; }
+.conv-table-wrap { overflow-x: auto; margin-top: 1rem; }
+.conv-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.conv-table th, .conv-table td {
+    text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid rgba(0,0,0,0.08);
+    vertical-align: top;
+}
+.conv-table th { font-weight: 600; color: #555; background: rgba(0,0,0,0.02); position: sticky; top: 0; }
+.conv-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.conv-table td.mono { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #555; }
+.conv-table td { max-width: 28ch; overflow: hidden; text-overflow: ellipsis; }
+.conv-del {
+    border: none; background: transparent; color: #b91c1c; font-size: 1.1rem;
+    cursor: pointer; padding: 0.1rem 0.45rem; border-radius: 0.25rem;
+}
+.conv-del:hover { background: rgba(185, 28, 28, 0.1); }

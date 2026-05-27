@@ -13,6 +13,114 @@ function setTab(name) {
     if (name === 'usage') {
         Object.values(CHARTS).forEach(c => c && c.resize());
     }
+    if (name === 'conversations') {
+        refreshConversations();
+    }
+}
+
+function getAdminToken() {
+    return localStorage.getItem('admin_token') || '';
+}
+
+function authHeaders() {
+    const t = getAdminToken();
+    return t ? { 'Authorization': 'Bearer ' + t } : {};
+}
+
+function escapeHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function truncate(s, n) {
+    s = String(s == null ? '' : s);
+    return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function shortTs(iso) {
+    if (!iso) return '—';
+    try {
+        const d = new Date(iso);
+        const pad = n => String(n).padStart(2, '0');
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    } catch (e) { return iso; }
+}
+
+async function refreshConversations() {
+    const tbody = document.getElementById('conv-tbody');
+    const note = document.getElementById('conv-auth-note');
+    if (note) note.textContent = getAdminToken()
+        ? 'Admin token detected — delete actions enabled.'
+        : 'No admin token saved. Set one on the chat page (Knowledge Base → Admin Access Token) to enable deletes.';
+    if (!tbody) return;
+    try {
+        const data = await jget('/backend/api/conversations?limit=200');
+        setText('conv-backend', data.backend || '—');
+        const items = data.items || [];
+        if (items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" style="padding:1rem; text-align:center; color:#888">No conversations yet.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = items.map(r => `
+            <tr>
+                <td title="${escapeHtml(r.ts || '')}">${escapeHtml(shortTs(r.ts))}</td>
+                <td class="mono" title="${escapeHtml(r.thread_id || '')}">${escapeHtml((r.thread_id || '').slice(0, 8))}</td>
+                <td title="${escapeHtml(r.query || '')}">${escapeHtml(truncate(r.query, 120))}</td>
+                <td title="${escapeHtml(r.answer || '')}">${escapeHtml(truncate(r.answer, 160))}</td>
+                <td class="num">${r.embed_ms|0} ms</td>
+                <td class="num">${r.ai_ms|0} ms</td>
+                <td class="num">${r.total_ms|0} ms</td>
+                <td class="num">${r.doc_count|0}</td>
+                <td>${escapeHtml(r.model || '—')}</td>
+                <td><button class="conv-del" onclick="deleteConversation(${r.id})">×</button></td>
+            </tr>`).join('');
+    } catch (e) {
+        console.warn('refreshConversations failed', e);
+        tbody.innerHTML = `<tr><td colspan="10" style="padding:1rem; color:#b91c1c">Failed to load: ${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+async function deleteConversation(id) {
+    if (!getAdminToken()) {
+        alert('Admin token required. Set one on the chat page (Knowledge Base → Admin Access Token).');
+        return;
+    }
+    if (!confirm(`Delete conversation #${id}?`)) return;
+    try {
+        const r = await fetch('/backend/api/conversations/' + encodeURIComponent(id), {
+            method: 'DELETE',
+            headers: authHeaders(),
+            credentials: 'same-origin',
+        });
+        if (r.status === 401) { alert('Unauthorized — check admin token.'); return; }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        refreshConversations();
+    } catch (e) {
+        alert('Delete failed: ' + e.message);
+    }
+}
+
+async function clearAllConversations() {
+    if (!getAdminToken()) {
+        alert('Admin token required. Set one on the chat page (Knowledge Base → Admin Access Token).');
+        return;
+    }
+    if (!confirm('Delete ALL conversations? This cannot be undone.')) return;
+    try {
+        const r = await fetch('/backend/api/conversations', {
+            method: 'DELETE',
+            headers: authHeaders(),
+            credentials: 'same-origin',
+        });
+        if (r.status === 401) { alert('Unauthorized — check admin token.'); return; }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json().catch(() => ({}));
+        refreshConversations();
+        alert(`Deleted ${data.deleted ?? 0} conversation(s).`);
+    } catch (e) {
+        alert('Clear failed: ' + e.message);
+    }
 }
 
 const SYS_POLL_MS = 30_000;
@@ -81,17 +189,18 @@ async function pollSystem() {
 async function pollConnections() {
     try {
         const c = await jget('/backend/api/connections');
-        const map = {
-            qdrant: { status: 'up' },
-            gemini: { status: 'up' },
-            embedding_model: { status: 'loaded' },
-            logger: { status: 'writing' },
-            usage_db: { status: 'up' },
+        const okStatuses = {
+            qdrant: ['up'],
+            gemini: ['up'],
+            embedding_model: ['loaded'],
+            logger: ['writing', 'stdout_only'],
+            usage_db: ['up', 'memory_fallback'],
         };
         Object.entries(c).forEach(([key, val]) => {
             const span = document.querySelector(`[data-conn="${key}"]`);
             if (!span) return;
-            const good = (val.status === (map[key]?.status || 'up')) || val.status === 'memory_fallback';
+            const accepted = okStatuses[key] || ['up'];
+            const good = accepted.includes(val.status);
             const dot = good ? '🟢' : '🔴';
             const label = key.replace('_', ' ');
             span.textContent = `${dot} ${label}`;

@@ -57,9 +57,9 @@ def catalog_for_viewer(active_primary: str, active_fallback: str) -> List[Dict[s
     out = []
     for m in MODELS:
         mid = m["id"].lower()
-        if primary_l and (mid in primary_l or primary_l in mid):
+        if primary_l and mid == primary_l:
             role = "primary"
-        elif fallback_l and (mid in fallback_l or fallback_l in mid):
+        elif fallback_l and mid == fallback_l:
             role = "fallback"
         else:
             role = "alternative"
