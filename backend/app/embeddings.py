@@ -36,8 +36,18 @@ try:
 except ImportError:
     HAS_OPENAI = False
 
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    HAS_GEMINI = True
+except Exception:
+    genai = None
+    genai_types = None
+    HAS_GEMINI = False
+
 
 _FE_MODEL: Optional["TextEmbedding"] = None
+_GEMINI_CLIENT: Optional["object"] = None
 
 
 def _is_e5_model(name: str) -> bool:
@@ -131,6 +141,57 @@ async def embed_texts_azure(texts: List[str]) -> List[List[float]]:
     return [d.embedding for d in resp.data]
 
 
+def _init_gemini_client():
+    global _GEMINI_CLIENT
+    if _GEMINI_CLIENT is not None:
+        return _GEMINI_CLIENT
+    if not HAS_GEMINI:
+        raise RuntimeError("google-genai not installed")
+    api_key = getattr(settings, 'gemini_api_key', None)
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    _GEMINI_CLIENT = genai.Client(api_key=api_key)
+    return _GEMINI_CLIENT
+
+
+def _l2_normalize(vec: List[float]) -> List[float]:
+    import math
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm == 0.0:
+        return vec
+    return [v / norm for v in vec]
+
+
+async def embed_texts_gemini(texts: List[str], is_query: bool = False) -> List[List[float]]:
+    """Embed via Gemini Embeddings API (gemini-embedding-001).
+
+    Output dim is controlled by settings.embedding_dim. gemini-embedding-001
+    uses MRL — when dim < 3072 we re-normalize as recommended by Google.
+    """
+    client = _init_gemini_client()
+    model = getattr(settings, 'gemini_embedding_model', 'gemini-embedding-001')
+    out_dim = int(getattr(settings, 'embedding_dim', 768))
+    task_type = "RETRIEVAL_QUERY" if is_query else "RETRIEVAL_DOCUMENT"
+
+    out: List[List[float]] = []
+    BATCH = 100  # Gemini embed_content batch ceiling
+    for i in range(0, len(texts), BATCH):
+        chunk = texts[i:i + BATCH]
+        cfg = genai_types.EmbedContentConfig(
+            task_type=task_type,
+            output_dimensionality=out_dim,
+        )
+        resp = await _run_blocking(
+            lambda c=chunk: client.models.embed_content(model=model, contents=c, config=cfg)
+        )
+        for e in resp.embeddings:
+            v = list(e.values)
+            if out_dim < 3072:
+                v = _l2_normalize(v)
+            out.append(v)
+    return out
+
+
 def _deterministic_fallback(texts: List[str], dim: int = 64) -> List[List[float]]:
     from hashlib import md5
     import math
@@ -156,6 +217,9 @@ async def embed_texts(texts: List[str], provider: str = 'fastembed', context: Op
 
     if p in ('azure', 'azure_openai'):
         return await embed_texts_azure(texts)
+
+    if p in ('gemini', 'google', 'google_genai'):
+        return await embed_texts_gemini(texts, is_query=is_query)
 
     if p in ('fastembed', 'fast', 'fe') and HAS_FASTEMBED:
         try:

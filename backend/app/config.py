@@ -38,6 +38,10 @@ class Settings:
             or os.getenv('gemini_model_fallback')
             or 'gemini-2.5-flash-lite'
         )
+        # Gemini embeddings (used when EMBEDDING_PROVIDER=gemini).
+        # gemini-embedding-001 outputs 3072-dim by default but supports MRL truncation
+        # — set EMBEDDING_DIM=768 (or 1536) for smaller index.
+        self.gemini_embedding_model = os.getenv('GEMINI_EMBEDDING_MODEL', 'gemini-embedding-001')
 
         # Admin token for protecting upload/reset endpoints
         self.admin_token = os.getenv('ADMIN_TOKEN') or None
