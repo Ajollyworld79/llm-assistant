@@ -11,6 +11,33 @@ from typing import List, Dict, Any
 
 MODELS: List[Dict[str, Any]] = [
     {
+        "id": "gemini-flash-latest",
+        "label": "Gemini Flash (latest)",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Auto-alias to the newest Flash release. May point to a preview/experimental version; hot-swaps with 2-week email notice.",
+    },
+    {
+        "id": "gemini-3.5-flash",
+        "label": "Gemini 3.5 Flash",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Stable frontier Flash. Free tier available — use if you want fresh quota-bucket on a newer model.",
+    },
+    {
+        "id": "gemini-3.1-flash-lite",
+        "label": "Gemini 3.1 Flash-Lite",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Stable Lite (released May 2026). Recommended as fallback — generous free-tier limits.",
+    },
+    {
         "id": "gemini-2.5-flash",
         "label": "Gemini 2.5 Flash",
         "vendor": "Google",
@@ -26,7 +53,7 @@ MODELS: List[Dict[str, Any]] = [
         "input_per_m_usd": 0.0,
         "output_per_m_usd": 0.0,
         "context_window": 1_000_000,
-        "description": "Free tier (15 RPM / 1000 RPD). Highest throughput — used as fallback.",
+        "description": "Free tier (15 RPM / 1000 RPD). Older Lite — superseded by 3.1-flash-lite.",
     },
     {
         "id": "gemini-2.5-pro",
@@ -36,15 +63,6 @@ MODELS: List[Dict[str, Any]] = [
         "output_per_m_usd": 0.0,
         "context_window": 1_000_000,
         "description": "Free tier (5 RPM). Strongest reasoning, but tight rate limit.",
-    },
-    {
-        "id": "gemini-3.5-flash",
-        "label": "Gemini 3.5 Flash",
-        "vendor": "Google",
-        "input_per_m_usd": 0.0,
-        "output_per_m_usd": 0.0,
-        "context_window": 1_000_000,
-        "description": "Newer frontier Flash. Available on free tier — swap in via GEMINI_MODEL if you want more intelligence.",
     },
 ]
 

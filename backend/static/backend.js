@@ -192,7 +192,7 @@ async function pollConnections() {
         const okStatuses = {
             qdrant: ['up'],
             gemini: ['up'],
-            embedding_model: ['loaded'],
+            embedding_model: ['loaded', 'configured'],
             logger: ['writing', 'stdout_only'],
             usage_db: ['up', 'memory_fallback'],
         };
@@ -208,7 +208,7 @@ async function pollConnections() {
         // Tile dots
         setDot('tile-qdrant-dot', c.qdrant?.status === 'up' ? 'green' : 'red');
         setText('tile-qdrant-points', c.qdrant?.points_count ?? '—');
-        setDot('tile-embed-dot', c.embedding_model?.status === 'loaded' ? 'green' : 'yellow');
+        setDot('tile-embed-dot', ['loaded', 'configured'].includes(c.embedding_model?.status) ? 'green' : 'yellow');
         const geminiColor = c.gemini?.status === 'up' ? 'green' : (c.gemini?.status === 'unconfigured' ? 'yellow' : 'red');
         setDot('tile-primary-dot', geminiColor);
         setDot('tile-fallback-dot', geminiColor);

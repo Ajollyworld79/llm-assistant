@@ -117,19 +117,40 @@ async def api_connections():
         "last_check_at": now_iso,
     }
 
-    # Embedding model
-    try:
-        from ..embeddings import _FE_MODEL  # type: ignore
-    except ImportError:
+    # Embedding model — provider-aware. fastembed is "loaded" when the ONNX model
+    # is in memory; gemini/azure are "configured" when their credentials are set
+    # (we trust the API call to succeed on demand rather than warming a model).
+    provider = (getattr(settings, 'embedding_provider', '') or '').strip().lower()
+    if provider in ('gemini',):
+        ok = bool(getattr(settings, 'gemini_api_key', None) and getattr(settings, 'gemini_embedding_model', None))
+        out["embedding_model"] = {
+            "status": "configured" if ok else "unconfigured",
+            "provider": "gemini",
+            "model": getattr(settings, 'gemini_embedding_model', None),
+            "last_check_at": now_iso,
+        }
+    elif provider in ('azure', 'azure_openai'):
+        ok = bool(getattr(settings, 'azure_openai_api_key', None))
+        out["embedding_model"] = {
+            "status": "configured" if ok else "unconfigured",
+            "provider": "azure",
+            "model": getattr(settings, 'azure_embedding_deployment', None),
+            "last_check_at": now_iso,
+        }
+    else:
         try:
-            from embeddings import _FE_MODEL  # type: ignore
-        except Exception:
-            _FE_MODEL = None
-    out["embedding_model"] = {
-        "status": "loaded" if _FE_MODEL is not None else "not_loaded",
-        "model": settings.fastembed_model,
-        "last_check_at": now_iso,
-    }
+            from ..embeddings import _FE_MODEL  # type: ignore
+        except ImportError:
+            try:
+                from embeddings import _FE_MODEL  # type: ignore
+            except Exception:
+                _FE_MODEL = None
+        out["embedding_model"] = {
+            "status": "loaded" if _FE_MODEL is not None else "not_loaded",
+            "provider": "fastembed",
+            "model": getattr(settings, 'fastembed_model', None),
+            "last_check_at": now_iso,
+        }
 
     # Logger / disk
     out["logger"] = {
