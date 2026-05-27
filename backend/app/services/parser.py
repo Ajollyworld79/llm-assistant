@@ -125,16 +125,32 @@ class ParserService:
                     except Exception:
                         pass
 
+                    # --- PyMuPDF (fitz) attempt — best for designed/Canva-style CVs ---
+                    fitz_parts: list = []
+                    try:
+                        import fitz  # PyMuPDF
+                        with fitz.open(stream=content, filetype="pdf") as doc:
+                            for page in doc:
+                                txt = page.get_text("text") or ''
+                                if txt.strip():
+                                    fitz_parts.append(txt)
+                    except Exception:
+                        pass
+
                     pypdf_text = '\n'.join(p for p in pypdf_parts if p and p.strip())
                     plumber_text = '\n'.join(p for p in plumber_parts if p and p.strip())
+                    fitz_text = '\n'.join(p for p in fitz_parts if p and p.strip())
 
-                    # Pick whichever extracted more characters
-                    if len(plumber_text) > len(pypdf_text):
-                        combined = plumber_text
-                        logger.info("PDF parse: chose pdfplumber (%d chars vs pypdf %d)", len(plumber_text), len(pypdf_text))
-                    else:
-                        combined = pypdf_text
-                        logger.info("PDF parse: chose pypdf (%d chars vs pdfplumber %d)", len(pypdf_text), len(plumber_text))
+                    # Pick whichever extracted the most characters
+                    candidates = [
+                        ('pypdf', pypdf_text),
+                        ('pdfplumber', plumber_text),
+                        ('pymupdf', fitz_text),
+                    ]
+                    candidates.sort(key=lambda x: len(x[1]), reverse=True)
+                    winner_name, combined = candidates[0]
+                    counts = ', '.join(f"{n}={len(t)}" for n, t in candidates)
+                    logger.info(f"PDF parse [{filename}]: chose {winner_name} ({counts})")
 
                     if not combined.strip():
                         return f"[Simulated PDF parsing for {filename} - pdf parsing libraries missing or failed]"
