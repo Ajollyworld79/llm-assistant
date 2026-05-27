@@ -378,13 +378,24 @@
                 const body = { query: query || 'Please analyze the attached content.', top_k: 4, thread_id: getThreadId() };
                 if (imagePayload.length > 0) body.images = imagePayload;
 
+                const headers = { 'Content-Type': 'application/json' };
+                if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
+
                 const res = await fetch(BASE + '/search', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers,
                     body: JSON.stringify(body)
                 });
-                const data = await res.json();
-                const answer = data.answer || data.message || 'Here are the most relevant results from your documents:';
+                if (res.status === 401) {
+                    addMessage('bot', 'Søgning kræver et access token. Gå til **Knowledge Base** og indsæt din admin token i feltet nederst.');
+                    return;
+                }
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    addMessage('bot', `Søgning fejlede (${res.status}): ${data.error || 'unknown error'}`);
+                    return;
+                }
+                const answer = data.answer || data.message || 'Her er de mest relevante resultater fra dine dokumenter:';
                 addMessage('bot', answer, data.results);
             } catch (e) {
                 addMessage('bot', 'Sorry, an error occurred while searching: ' + e.message);
