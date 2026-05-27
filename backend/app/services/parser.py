@@ -61,21 +61,25 @@ class ParserService:
                         out.append(' | '.join(pairs))
                 return '\n'.join(out)
 
-            # PDF parsing with link extraction
+            # PDF parsing with link extraction.
+            # Strategy: run BOTH pypdf and pdfplumber, pick whichever extracted
+            # the most text. Modern CVs (Canva/Notion layouts) often defeat
+            # pypdf silently — it returns partial text without raising, so the
+            # old fallback path was never triggered.
             if lower.endswith('.pdf'):
                 try:
-                    text_parts = []
+                    pypdf_parts: list = []
+                    plumber_parts: list = []
                     links = []
 
+                    # --- pypdf attempt (also extracts links) ---
                     try:
-                        # Prefer pypdf for link extraction and robust text
-                        
                         reader = PdfReader(io.BytesIO(content))
                         for i, page in enumerate(reader.pages, start=1):
                             try:
                                 page_text = page.extract_text() or ''
                                 if page_text.strip():
-                                    text_parts.append(page_text)
+                                    pypdf_parts.append(page_text)
                             except Exception:
                                 pass
 
@@ -83,7 +87,6 @@ class ParserService:
                             try:
                                 annots_obj = page.get('/Annots')  # type: ignore[reportGeneralTypeIssues]
                                 if annots_obj:
-                                    # annots_obj may be an array-like PdfObject; iterate defensively
                                     try:
                                         for a in annots_obj:
                                             try:
@@ -96,7 +99,6 @@ class ParserService:
                                             except Exception:
                                                 continue
                                     except TypeError:
-                                        # Not iterable - try single object handling
                                         try:
                                             a = annots_obj
                                             obj = a.get_object()
@@ -108,22 +110,34 @@ class ParserService:
                                         except Exception:
                                             pass
                             except Exception:
-                                # Some pdf versions have different structures; ignore
                                 pass
-
                     except Exception:
-                        # Fallback to pdfplumber for text only (no annotations extraction)
-                        try:
-                            import pdfplumber
-                            with pdfplumber.open(io.BytesIO(content)) as pdf:
-                                for page in pdf.pages:
-                                    txt = page.extract_text() or ''
-                                    if txt.strip():
-                                        text_parts.append(txt)
-                        except Exception:
-                            return f"[Simulated PDF parsing for {filename} - pdf parsing libraries missing or failed]"
+                        pass
 
-                    combined = '\n'.join([p for p in text_parts if p and p.strip()])
+                    # --- pdfplumber attempt (often better on complex layouts) ---
+                    try:
+                        import pdfplumber
+                        with pdfplumber.open(io.BytesIO(content)) as pdf:
+                            for page in pdf.pages:
+                                txt = page.extract_text() or ''
+                                if txt.strip():
+                                    plumber_parts.append(txt)
+                    except Exception:
+                        pass
+
+                    pypdf_text = '\n'.join(p for p in pypdf_parts if p and p.strip())
+                    plumber_text = '\n'.join(p for p in plumber_parts if p and p.strip())
+
+                    # Pick whichever extracted more characters
+                    if len(plumber_text) > len(pypdf_text):
+                        combined = plumber_text
+                        logger.info("PDF parse: chose pdfplumber (%d chars vs pypdf %d)", len(plumber_text), len(pypdf_text))
+                    else:
+                        combined = pypdf_text
+                        logger.info("PDF parse: chose pypdf (%d chars vs pdfplumber %d)", len(pypdf_text), len(plumber_text))
+
+                    if not combined.strip():
+                        return f"[Simulated PDF parsing for {filename} - pdf parsing libraries missing or failed]"
 
                     if links:
                         combined += '\n\n**Links from PDF document:**\n'
