@@ -11,10 +11,6 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-warm fastembed ONNX model into the image (avoids runtime download).
-# Multilingual MiniLM (~120MB) supports Danish via ~50 languages.
-RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')"
-
 COPY backend/ ./backend/
 
 # Qdrant data directory — created empty in the image. On Railway, mount a
