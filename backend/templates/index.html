@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qdrant AI Assistant</title>
+    <title>Helios — Support, on demand</title>
     <link rel="stylesheet" href="/static/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 </head>
@@ -21,17 +21,18 @@
         <aside class="sidebar">
             <div class="brand">
                 <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    <circle cx="12" cy="12" r="4" stroke-width="2"/>
+                    <path stroke-linecap="round" stroke-width="2" d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/>
                 </svg>
-                <span>Qdrant AI</span>
+                <span>Helios</span>
             </div>
-            
+
             <nav>
                 <div class="nav-item active" onclick="setView('chat')" id="nav-chat">
                     <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                     </svg>
-                    Chat Assistant
+                    Ask Helios
                 </div>
                 <div class="nav-item" onclick="setView('admin')" id="nav-admin">
                     <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -42,7 +43,8 @@
             </nav>
 
             <div class="gdpr-sidebar">
-                <a class="gdpr-link" href="/backend" target="_blank">Backend</a>
+                <div class="gdpr-sidebar-title">Operations</div>
+                <a class="gdpr-link" href="/backend" target="_blank">Console →</a>
             </div>
         </aside>
 
@@ -65,15 +67,36 @@
             <div id="view-chat" class="view active">
                 <div class="chat-container">
                     <div class="chat-history" id="chat-history">
-                        <!-- Welcome message -->
-                        <div class="message bot">
-                            <div class="message-label">Chat</div>
-                            <div class="msg-bubble">{{ welcome_prompt|trim }}</div>
-                        </div>
+                        <section id="welcome-hero" class="welcome-hero">
+                            <h1>How can we <em>help</em><br>you today?</h1>
+                            <p>{{ welcome_prompt|trim }}</p>
+                            <div class="welcome-suggestions">
+                                <button type="button" class="suggestion" onclick="askSuggestion('How can Gustav help me with LLM work?')">
+                                    <span class="sug-dot"></span>
+                                    <span>How can Gustav help me with LLM work?</span>
+                                    <span class="sug-arrow">→</span>
+                                </button>
+                                <button type="button" class="suggestion" onclick="askSuggestion('Hvilke projekter har Gustav bygget?')">
+                                    <span class="sug-dot"></span>
+                                    <span>Hvilke projekter har Gustav bygget?</span>
+                                    <span class="sug-arrow">→</span>
+                                </button>
+                                <button type="button" class="suggestion" onclick="askSuggestion('What is in Gustav&#39;s CV?')">
+                                    <span class="sug-dot"></span>
+                                    <span>What is in Gustav's CV?</span>
+                                    <span class="sug-arrow">→</span>
+                                </button>
+                                <button type="button" class="suggestion" onclick="askSuggestion('Fortæl om Gustavs erfaring med Python og AI.')">
+                                    <span class="sug-dot"></span>
+                                    <span>Fortæl om Gustavs erfaring med Python og AI.</span>
+                                    <span class="sug-arrow">→</span>
+                                </button>
+                            </div>
+                        </section>
                     </div>
 
                     <div class="input-area">
-                        <textarea id="query-input" placeholder="Ask a question, or attach a document/image..." onkeypress="handleKeyPress(event)"></textarea>
+                        <textarea id="query-input" placeholder="Ask anything…" onkeypress="handleKeyPress(event)"></textarea>
                         <input type="file" id="chat-file-input" multiple style="display:none"
                                accept=".pdf,.docx,.txt,.csv,.md,.pptx,.png,.jpg,.jpeg,.webp,.gif"
                                onchange="handleChatFileSelect(event)" />
@@ -101,8 +124,8 @@
             <!-- Admin View -->
             <div id="view-admin" class="view">
                 <div class="admin-container">
-                    <div class=\"panel-header\">
-                        <h2>Knowledge Base Management</h2>
+                    <div class="panel-header">
+                        <h2>Knowledge Base</h2>
                         <div style="display: flex; gap: 0.5rem;">
                             <button onclick="optimizeDocs(event, this)" class="btn btn-secondary" title="Optimize Collection">
                                 <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -126,16 +149,15 @@
                     </div>
 
                     <div class="panel">
-                        <h3>Upload Documents</h3>
-                        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Supported formats: PDF, DOCX, TXT, CSV</p>
+                        <h3>Add to the knowledge base</h3>
+                        <p>Drop in your handbooks, policies, and SOPs. Supported: PDF, DOCX, TXT, CSV. Max 10MB per file.</p>
                         
                         <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
                             <svg class="icon-upload" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                             </svg>
                             <div>
-                                <strong>Click to upload</strong> or drag and drop<br>
-                                <span style="font-size: 0.85rem; color: var(--text-muted)">Max file size 10MB</span>
+                                <strong>Click to upload</strong> or drag a file here
                             </div>
                             <input type="file" id="file-input" multiple style="display:none" onchange="handleFileSelect(event)" />
                         </div>
@@ -150,9 +172,9 @@
 
                     <div class="panel">
                         <div class="section-header">
-                            <h3>Indexed Documents</h3>
+                            <h3>Indexed sources</h3>
                             <div class="status-indicator">
-                                Status: <span id="system-status-badge" class="badge badge-txt">Checking...</span>
+                                System <span id="system-status-badge" class="badge badge-txt">checking…</span>
                             </div>
                         </div>
                         
@@ -378,6 +400,10 @@
         }
 
         function addMessage(type, text, results = null) {
+            // Hide welcome hero on first interaction
+            const hero = document.getElementById('welcome-hero');
+            if (hero) hero.style.display = 'none';
+
             const history = document.getElementById('chat-history');
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${type}`;
@@ -390,22 +416,28 @@
                     return `
                     <div class="result-card" onclick="viewDocument('${escapeHtml(r.filename)}')">
                         <div class="result-header">
-                            <span>📄 ${escapeHtml(r.filename)}</span>
-                            <span class="score-badge ${scoreClass}">${(r.score * 100).toFixed(0)}% Match</span>
+                            <span>${escapeHtml(r.filename)}</span>
+                            <span class="score-badge ${scoreClass}">${(r.score * 100).toFixed(0)}%</span>
                         </div>
-                        <div class="result-text">"${escapeHtml(r.chunk_text)}"</div>
+                        <div class="result-text">${escapeHtml(r.chunk_text)}</div>
                     </div>`;
                 }).join('');
                 contentHtml += `<div class="results-grid">${cardsHtml}</div>`;
             }
 
             msgDiv.innerHTML = `
-                <div class="message-label">${type === 'user' ? 'You' : 'Chat'}</div>
+                <div class="message-label">${type === 'user' ? 'You' : 'Helios'}</div>
                 ${contentHtml}
             `;
 
             history.appendChild(msgDiv);
             history.scrollTop = history.scrollHeight;
+        }
+
+        function askSuggestion(text) {
+            const input = document.getElementById('query-input');
+            input.value = text;
+            doSearch();
         }
 
         function escapeHtml(text) {
@@ -786,7 +818,7 @@
 
     </script>
 
-    <div id="corner-credits" class="corner-credits" aria-hidden="true">© <span id="corner-year"></span> Gustav Wind Christensen • Built with Quart &amp; Qdrant</div>
+    <div id="corner-credits" class="corner-credits" aria-hidden="true">Helios &middot; <span id="corner-year"></span> &middot; an editorial demo</div>
     <script>
       // Populate dynamic year for corner credits
       (function() {

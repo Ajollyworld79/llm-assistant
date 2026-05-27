@@ -3,30 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Backend Viewer — LLM Assistant</title>
+    <title>Helios — Console</title>
     <link rel="stylesheet" href="/static/styles.css">
     <link rel="stylesheet" href="/static/backend.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="backend-body">
 
 <div class="backend-header">
     <div class="backend-title">
-        <a href="/" class="backend-home">← Back to chat</a>
-        <h1>Backend Viewer</h1>
+        <h1>Operations</h1>
+        <a href="/" class="backend-home">← back to chat</a>
     </div>
     {% if locked %}
-    <div class="lock-banner">🔒 LOCKED DEMO — all mutations disabled. Inspection only.</div>
+    <div class="lock-banner">LOCKED DEMO &middot; mutations disabled, inspection only</div>
     {% else %}
-    <div class="lock-banner lock-banner-unlocked">🔓 UNLOCKED — running in dev mode (BACKEND_DEMO_LOCKED=false).</div>
+    <div class="lock-banner lock-banner-unlocked">UNLOCKED &middot; running in dev mode</div>
     {% endif %}
     <div id="connection-banner" class="connection-banner">
-        <span data-conn="qdrant">⚪ Qdrant</span>
-        <span data-conn="gemini">⚪ Gemini</span>
-        <span data-conn="embedding_model">⚪ Embedding</span>
-        <span data-conn="logger">⚪ Logger</span>
-        <span data-conn="usage_db">⚪ Usage DB</span>
+        <span data-conn="qdrant">○ Qdrant</span>
+        <span data-conn="gemini">○ Gemini</span>
+        <span data-conn="embedding_model">○ Embedding</span>
+        <span data-conn="logger">○ Logger</span>
+        <span data-conn="usage_db">○ Usage DB</span>
     </div>
     <nav class="bk-tabs" role="tablist">
         <button class="bk-tab active" data-tab="overview" onclick="setTab('overview')">Overview</button>
@@ -41,6 +43,7 @@
 <!-- ====== TAB: OVERVIEW ====== -->
 <section class="bk-tab-panel active" id="tab-overview">
     <h2>System &amp; status</h2>
+    <p class="bk-help">Real-time view of the stack powering Helios. Tiles refresh on each interaction.</p>
     <div class="tile-grid">
         <div class="tile">
             <div class="tile-label">Primary model</div>

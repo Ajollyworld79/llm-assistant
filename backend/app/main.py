@@ -111,10 +111,12 @@ CONTENT_FILTER_RESPONSE = (
 
 
 def get_welcome_prompt() -> str:
-    """Return the welcome message shown on the index page (demo-aware)."""
-    base = "Hej! 👋 Jeg er din AI-chatbot. Spørg mig om hvad som helst, eller upload dokumenter/billeder direkte i chatten for at få svar baseret på dem."
+    """Return the welcome message shown on the index page (demo-aware, bilingual DA/EN)."""
+    da = "Hej 👋 Jeg er din AI-supportassistent. Stil et spørgsmål, så finder jeg svaret i den tilgængelige viden — eller upload et dokument og spørg direkte ind i det."
+    en = "Hi 👋 I'm your AI support assistant. Ask a question and I'll answer from the indexed knowledge — or drop in a document and ask about it directly."
+    base = f"{da}\n\n{en}"
     if getattr(settings, "demo", False):
-        return f"{base} (Demo mode er aktiv — svarene er simulerede.)"
+        return f"{base}\n\n(Demo mode er aktiv — svarene er simulerede. / Demo mode is active — answers are simulated.)"
     return base
 
 
