@@ -375,7 +375,7 @@
                     }
                 }
 
-                const body = { query: query || 'Please analyze the attached content.', top_k: 4, thread_id: getThreadId() };
+                const body = { query: query || 'Please analyze the attached content.', top_k: 10, thread_id: getThreadId() };
                 if (imagePayload.length > 0) body.images = imagePayload;
 
                 const headers = { 'Content-Type': 'application/json' };

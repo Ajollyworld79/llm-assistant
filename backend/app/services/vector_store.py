@@ -79,11 +79,11 @@ class EmbeddingService:
     def cosine_sim(self, a: List[float], b: List[float]) -> float:
         return sum(x * y for x, y in zip(a, b))
 
-    async def chunk_text_async(self, text: str, chunk_size: int = 200, overlap: int = 50) -> List[str]:
+    async def chunk_text_async(self, text: str, chunk_size: int = 400, overlap: int = 80) -> List[str]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.chunk_text, text, chunk_size, overlap)
 
-    def chunk_text(self, text: str, chunk_size: int = 200, overlap: int = 50) -> List[str]:
+    def chunk_text(self, text: str, chunk_size: int = 400, overlap: int = 80) -> List[str]:
         """Chunk text by sentences into near chunk_size words with overlap.
         This gives more natural breaks than raw word slicing."""
         # Normalize whitespace
