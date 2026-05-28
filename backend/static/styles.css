@@ -14,7 +14,7 @@
   --ink:           #1A1815;
   --ink-soft:      #3C3833;
   --ink-mute:      #756F65;
-  --ink-faint:     #A29C90;
+  --ink-faint:     #7E766A;
 
   /* Rules / borders */
   --rule:          #E8DFCB;
@@ -354,6 +354,16 @@ code, pre, kbd, .mono { font-family: var(--mono); font-size: 0.85em; }
 /* User vs bot — different label tone, same structure */
 .message.user .message-label { color: var(--ink); font-weight: 600; }
 .message.bot .message-label { color: var(--accent); font-weight: 600; }
+/* Subtle turn marker: a teal dot leads the bot label so replies are easy to
+   scan in a long thread — editorial, not a chat bubble. */
+.message.bot .message-label::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
 
 /* Welcome / hero state for the empty chat */
 .welcome-hero {
@@ -541,7 +551,6 @@ textarea:focus {
 }
 textarea::placeholder {
   color: var(--ink-faint);
-  font-style: italic;
   font-family: var(--serif);
   font-size: 1.05rem;
 }
