@@ -159,11 +159,18 @@ class AuthManager:
         return decorated_function
 
     def require_search_token(self, f):
-        """Gate /search behind SEARCH_API_TOKEN when configured.
+        """Gate /search smartly: same-origin browser requests pass freely, while
+        external API consumers must present a Bearer token (SEARCH_API_TOKEN or
+        ADMIN_TOKEN).
 
-        Open by default (backward compat for dev / local). Once SEARCH_API_TOKEN
-        is set in the environment, every request must carry a matching Bearer
-        token. The admin_token is also accepted so admin tools keep working.
+        - If SEARCH_API_TOKEN is not configured: endpoint stays fully open.
+        - If configured: requests from our own web UI (detected via
+          Sec-Fetch-Site=same-origin/same-site or matching Origin/Referer host)
+          are allowed without a token. Everything else must carry a valid Bearer.
+
+        Note: Origin/Sec-Fetch headers can be spoofed by determined attackers —
+        this is a usability heuristic, not strict security. Use rate limiting
+        (already installed) for actual abuse protection.
         """
         @wraps(f)
         async def decorated_function(*args, **kwargs):
@@ -171,9 +178,22 @@ class AuthManager:
             if not search_token:
                 # Not configured — endpoint stays open.
                 return await f(*args, **kwargs)
+
+            # Browser same-origin heuristic
+            sec_fetch_site = request.headers.get('Sec-Fetch-Site', '')
+            host = request.headers.get('Host', '')
+            origin = request.headers.get('Origin', '') or request.headers.get('Referer', '')
+            is_browser_same_origin = (
+                sec_fetch_site in ('same-origin', 'same-site')
+                or (host and origin and host in origin)
+            )
+            if is_browser_same_origin:
+                return await f(*args, **kwargs)
+
+            # External request — Bearer required
             auth = request.headers.get('Authorization', '')
             if not auth.startswith('Bearer '):
-                return jsonify({'error': 'unauthorized'}), 401
+                return jsonify({'error': 'unauthorized', 'message': 'External calls require Authorization: Bearer <token>'}), 401
             token = auth.split(' ', 1)[1].strip()
             admin_token = getattr(self.settings, 'admin_token', None) or ''
             if token != search_token and token != admin_token:
