@@ -1,39 +1,39 @@
 # Quart async web framework
-Quart==0.20.0
-quart-cors==0.8.0
-uvicorn[standard]==0.38.0
+Quart>=0.20.0
+quart-cors>=0.8.0
+uvicorn[standard]>=0.38.0
 
 # Gemini (free Google AI Studio API, async-capable)
 google-genai>=1.0.0
 
 # Vector DB
-qdrant-client==1.15.1
+qdrant-client>=1.15.1
 
 # Embeddings: ONNX-based, no torch
 fastembed
 
 # Document parsing
-pdfplumber==0.11.9
-python-docx==1.2.0
-pypdf==6.12.2
-PyMuPDF==1.27.2.3
+pdfplumber>=0.11.9
+python-docx>=1.2.0
+pypdf>=6.12.2
+PyMuPDF>=1.27.2.3
 
 # Logging
-loguru==0.7.3
-concurrent-log-handler==0.9.28
+loguru>=0.7.3
+concurrent-log-handler>=0.9.28
 
 # Process memory tracking (used by middleware + /backend metrics)
-psutil==7.0.0
+psutil>=7.0.0
 
 # Crypto (used for GDPR payload encryption in PR 2)
-pycryptodome==3.23.0
+pycryptodome>=3.23.0
 
 # Config
-python-dotenv==1.0.1
+python-dotenv>=1.0.1
 pydantic
 
 # Postgres for usage history (PR 3) — Railway provides DATABASE_URL automatically
-asyncpg==0.30.0
+asyncpg>=0.30.0
 
 # Dev
-pytest==8.3.3
+pytest>=8.3.3
