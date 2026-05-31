@@ -66,11 +66,17 @@ async def index():
 @backend_bp.get('/api/system')
 async def api_system():
     git_sha = os.environ.get('GIT_SHA') or os.environ.get('RAILWAY_GIT_COMMIT_SHA') or 'unknown'
+    embedding_provider = settings.embedding_provider
+    embedding_model = (
+        settings.gemini_embedding_model
+        if embedding_provider == 'gemini'
+        else settings.fastembed_model
+    )
     return jsonify({
         "model_primary": settings.gemini_model or 'not_configured',
         "model_fallback": settings.gemini_model_fallback or 'not_configured',
-        "embedding_provider": settings.embedding_provider,
-        "embedding_model": settings.fastembed_model,
+        "embedding_provider": embedding_provider,
+        "embedding_model": embedding_model,
         "embedding_dim": settings.embedding_dim,
         "llm_provider": "Google Gemini (free API)",
         "git_sha": git_sha[:12] if git_sha != 'unknown' else git_sha,

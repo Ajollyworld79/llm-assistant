@@ -238,7 +238,7 @@ async function pollSystem() {
         setText('tile-primary-model', s.model_primary);
         setText('tile-fallback-model', s.model_fallback);
         setText('tile-embed-model', s.embedding_model);
-        setText('tile-embed-dim', `${s.embedding_dim} dim`);
+        setText('tile-embed-dim', `${s.embedding_provider} · ${s.embedding_dim} dim`);
         setText('tile-region', s.llm_provider);
         setText('tile-git-sha', s.git_sha);
         setText('tile-uptime', `uptime ${humanSeconds(s.uptime_seconds)}`);
