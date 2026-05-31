@@ -121,8 +121,8 @@ CONTENT_FILTER_RESPONSE = (
 
 def get_welcome_prompt() -> str:
     """Return the welcome message shown on the index page (demo-aware, bilingual DA/EN)."""
-    da = "Hej. Jeg er din AI-supportassistent. Stil et spørgsmål, så finder jeg svaret i den indekserede viden og viser kilderne bag."
-    en = "Hi. I'm your AI support assistant. Ask a question and I'll answer from the indexed knowledge, with sources visible below the reply."
+    da = "Hej. Jeg er din AI-supportassistent til IT, fejlfinding og praktiske spørgsmål. Hvis der findes relevante dokumenter i RAG-indekset, bruger jeg dem som kilder — ellers svarer jeg ud fra generel viden."
+    en = "Hi. I'm your AI support assistant for IT, troubleshooting, and practical questions. When relevant documents exist in the RAG index, I use them as sources — otherwise I answer from general knowledge."
     base = f"{da}\n\n{en}"
     if getattr(settings, "demo", False):
         return f"{base}\n\n(Demo mode er aktiv — svarene er simulerede. / Demo mode is active — answers are simulated.)"
