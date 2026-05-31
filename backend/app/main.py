@@ -29,7 +29,7 @@ try:
     from .module.lifecycle import lifecycle
     from .module.apimonitor import monitor
     from .module.crypto import encrypt_text, decrypt_text
-    from .module.demo_lock import reject_if_locked
+    from .module.demo_lock import reject_if_locked, is_locked as demo_is_locked
     from .module.usage_db import usage_db
     try:
         from .module.garbage_collection import gc_manager
@@ -52,7 +52,7 @@ except ImportError:
     from module.lifecycle import lifecycle
     from module.apimonitor import monitor
     from module.crypto import encrypt_text, decrypt_text
-    from module.demo_lock import reject_if_locked
+    from module.demo_lock import reject_if_locked, is_locked as demo_is_locked
     from module.usage_db import usage_db
     try:
         from module.garbage_collection import gc_manager
@@ -121,8 +121,8 @@ CONTENT_FILTER_RESPONSE = (
 
 def get_welcome_prompt() -> str:
     """Return the welcome message shown on the index page (demo-aware, bilingual DA/EN)."""
-    da = "Hej 👋 Jeg er din AI-supportassistent. Stil et spørgsmål, så finder jeg svaret i den tilgængelige viden — eller upload et dokument og spørg direkte ind i det."
-    en = "Hi 👋 I'm your AI support assistant. Ask a question and I'll answer from the indexed knowledge — or drop in a document and ask about it directly."
+    da = "Hej. Jeg er din AI-supportassistent. Stil et spørgsmål, så finder jeg svaret i den indekserede viden og viser kilderne bag."
+    en = "Hi. I'm your AI support assistant. Ask a question and I'll answer from the indexed knowledge, with sources visible below the reply."
     base = f"{da}\n\n{en}"
     if getattr(settings, "demo", False):
         return f"{base}\n\n(Demo mode er aktiv — svarene er simulerede. / Demo mode is active — answers are simulated.)"
@@ -347,7 +347,8 @@ async def index():
     # Pass a dynamic welcome prompt and demo flag to the template
     welcome_prompt = get_welcome_prompt()
     demo_mode = bool(getattr(settings, 'demo', False))
-    return await render_template('index.html', welcome_prompt=welcome_prompt, demo_mode=demo_mode)
+    locked = bool(demo_is_locked())
+    return await render_template('index.html', welcome_prompt=welcome_prompt, demo_mode=demo_mode, locked=locked)
 
 
 @app.route('/monitor')

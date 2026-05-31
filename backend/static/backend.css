@@ -318,6 +318,59 @@ section.bk-tab-panel > h2 {
     margin: 0;
 }
 
+/* ====== SOURCES TAB ====== */
+.source-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.4fr);
+    gap: var(--s-5);
+    align-items: start;
+}
+.source-control-panel,
+.source-list-panel {
+    margin-bottom: 0;
+}
+.source-upload-queue {
+    margin-top: var(--s-5);
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--rule);
+}
+.source-upload-queue[hidden] { display: none; }
+.source-file-list {
+    margin-bottom: var(--s-3);
+    color: var(--ink-mute);
+    font-size: 0.9rem;
+}
+.source-upload-progress {
+    margin-top: var(--s-2);
+    color: var(--ink-mute);
+    font-size: 0.82rem;
+    font-family: var(--mono);
+}
+.operator-token {
+    margin-top: var(--s-5);
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--rule);
+}
+.operator-token-row {
+    display: flex;
+    gap: var(--s-2);
+}
+.operator-token-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-2);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--sans);
+}
+.operator-token-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 /* ====== MODELS TAB ====== */
 .model-dropdowns {
     display: grid;
@@ -534,6 +587,7 @@ section.bk-tab-panel > h2 {
     .tile-grid { grid-template-columns: 1fr 1fr; }
     .metrics-grid { grid-template-columns: 1fr 1fr; }
     .metric-big:nth-child(2n) { border-right: none; }
+    .source-grid { grid-template-columns: 1fr; }
     .model-dropdowns { grid-template-columns: 1fr; }
     .playground-grid { grid-template-columns: 1fr; }
     .chart-grid { grid-template-columns: 1fr; }
@@ -566,6 +620,13 @@ section.bk-tab-panel > h2 {
     cursor: pointer; padding: 0.1rem 0.45rem; border-radius: 0.25rem;
 }
 .conv-del:hover { background: rgba(185, 28, 28, 0.1); }
+.conv-readonly {
+    font-family: var(--mono, monospace);
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-mute, #6b7280);
+}
 
 .conv-btn {
     padding: 8px 16px;

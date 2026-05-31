@@ -13,6 +13,9 @@ function setTab(name) {
     if (name === 'usage') {
         Object.values(CHARTS).forEach(c => c && c.resize());
     }
+    if (name === 'sources') {
+        refreshSources();
+    }
     if (name === 'conversations') {
         refreshConversations();
     }
@@ -27,10 +30,22 @@ function authHeaders() {
     return t ? { 'Authorization': 'Bearer ' + t } : {};
 }
 
+function isReadOnlyDemo() {
+    return Boolean(window.HELIOS_READ_ONLY);
+}
+
 function escapeHtml(s) {
     return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function escapeJsString(s) {
+    return String(s == null ? '' : s)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
 }
 
 function truncate(s, n) {
@@ -50,9 +65,11 @@ function shortTs(iso) {
 async function refreshConversations() {
     const tbody = document.getElementById('conv-tbody');
     const note = document.getElementById('conv-auth-note');
-    if (note) note.textContent = getAdminToken()
-        ? 'Admin token detected — delete actions enabled.'
-        : 'No admin token saved. Set one on the chat page (Knowledge Base → Admin Access Token) to enable deletes.';
+    if (note) note.textContent = isReadOnlyDemo()
+        ? 'Read-only demo: history is inspectable, deletion is disabled.'
+        : (getAdminToken()
+            ? 'Admin token detected — delete actions enabled.'
+            : 'No admin token saved. Delete actions remain disabled.');
     if (!tbody) return;
     try {
         const data = await jget('/backend/api/conversations?limit=200');
@@ -73,7 +90,7 @@ async function refreshConversations() {
                 <td class="num">${r.total_ms|0} ms</td>
                 <td class="num">${r.doc_count|0}</td>
                 <td>${escapeHtml(r.model || '—')}</td>
-                <td><button class="conv-del" onclick="deleteConversation(${r.id})">×</button></td>
+                <td>${isReadOnlyDemo() ? '<span class="conv-readonly">locked</span>' : `<button class="conv-del" onclick="deleteConversation(${r.id})">×</button>`}</td>
             </tr>`).join('');
     } catch (e) {
         console.warn('refreshConversations failed', e);
@@ -82,8 +99,12 @@ async function refreshConversations() {
 }
 
 async function deleteConversation(id) {
+    if (isReadOnlyDemo()) {
+        alert('Read-only demo: conversation deletion is disabled.');
+        return;
+    }
     if (!getAdminToken()) {
-        alert('Admin token required. Set one on the chat page (Knowledge Base → Admin Access Token).');
+        alert('Admin token required. Use private operator access to enable deletes.');
         return;
     }
     if (!confirm(`Delete conversation #${id}?`)) return;
@@ -102,8 +123,12 @@ async function deleteConversation(id) {
 }
 
 async function clearAllConversations() {
+    if (isReadOnlyDemo()) {
+        alert('Read-only demo: conversation deletion is disabled.');
+        return;
+    }
     if (!getAdminToken()) {
-        alert('Admin token required. Set one on the chat page (Knowledge Base → Admin Access Token).');
+        alert('Admin token required. Use private operator access to enable deletes.');
         return;
     }
     if (!confirm('Delete ALL conversations? This cannot be undone.')) return;
@@ -131,12 +156,27 @@ const USAGE_POLL_MS = 30_000;
 let SYSTEM_STATE = null;
 let PROMPT_STATE = null;
 let MODELS_STATE = null;
+let SOURCE_FILES = [];
 const CHARTS = {};
 
 // ---------- shared helpers ----------
 function setText(id, value) {
     const el = document.getElementById(id);
     if (el) el.textContent = value === undefined || value === null ? '—' : String(value);
+}
+
+function showToast(message, success = true, duration = 4000) {
+    const existing = document.getElementById('toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.className = `toast ${success ? 'toast-success' : 'toast-error'}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => {
+        toast.classList.add('toast-hide');
+        setTimeout(() => toast.remove(), 400);
+    }, duration);
 }
 
 function setDot(id, color) {
@@ -223,6 +263,251 @@ async function pollConnections() {
         console.warn('pollConnections failed', e);
     }
 }
+
+// ---------- RAG source library ----------
+
+function initSourceControls() {
+    const tokenInput = document.getElementById('operator-token-input');
+    if (tokenInput) tokenInput.value = getAdminToken();
+
+    const dropZone = document.getElementById('source-drop-zone');
+    if (!dropZone) return;
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+    });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files) {
+            addSourcesToQueue(Array.from(e.dataTransfer.files));
+        }
+    });
+}
+
+function saveOperatorToken() {
+    const input = document.getElementById('operator-token-input');
+    if (!input) {
+        showToast('Operator token is hidden in the read-only demo.', false);
+        return;
+    }
+    localStorage.setItem('admin_token', input.value.trim());
+    showToast('Operator token saved.');
+}
+
+function handleSourceFileSelect(e) {
+    addSourcesToQueue(Array.from(e.target.files || []));
+    e.target.value = '';
+}
+
+function addSourcesToQueue(files) {
+    SOURCE_FILES = files;
+    const list = document.getElementById('source-file-list');
+    const queue = document.getElementById('source-upload-queue');
+    if (!list || !queue) return;
+    list.innerHTML = files.map(f => `<div>${escapeHtml(f.name)} (${(f.size / 1024).toFixed(1)} KB)</div>`).join('');
+    queue.hidden = files.length === 0;
+}
+
+async function uploadSources() {
+    if (isReadOnlyDemo()) {
+        showToast('Upload is disabled in the read-only demo.', false);
+        return;
+    }
+    if (SOURCE_FILES.length === 0) return;
+    const token = getAdminToken();
+    if (!token) {
+        showToast('Private operator token required to upload sources.', false);
+        return;
+    }
+    const btn = document.getElementById('source-upload-btn');
+    const progress = document.getElementById('source-upload-progress');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Uploading...';
+    }
+    const errors = [];
+    for (let i = 0; i < SOURCE_FILES.length; i++) {
+        const file = SOURCE_FILES[i];
+        if (progress) progress.textContent = `Uploading ${i + 1}/${SOURCE_FILES.length}: ${file.name}`;
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+            const res = await fetch('/upload', { method: 'POST', body: fd, headers: authHeaders() });
+            if (res.status === 401) throw new Error('Unauthorized');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (e) {
+            errors.push(`${file.name}: ${e.message}`);
+        }
+    }
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Start upload';
+    }
+    SOURCE_FILES = [];
+    const queue = document.getElementById('source-upload-queue');
+    if (queue) queue.hidden = true;
+    const input = document.getElementById('source-file-input');
+    if (input) input.value = '';
+    if (errors.length) showToast(`Upload completed with ${errors.length} error(s).`, false);
+    else showToast('Sources uploaded.');
+    refreshSources();
+}
+
+async function clearSources() {
+    if (isReadOnlyDemo()) {
+        showToast('Clear is disabled in the read-only demo.', false);
+        return;
+    }
+    if (!getAdminToken()) {
+        showToast('Private operator token required to clear sources.', false);
+        return;
+    }
+    if (!confirm('Delete ALL indexed sources? This cannot be undone.')) return;
+    try {
+        const res = await fetch('/reset', { method: 'POST', headers: authHeaders() });
+        if (res.status === 401) {
+            showToast('Unauthorized. Check the operator token.', false);
+            return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        showToast(data.deleted !== undefined ? `Cleared ${data.deleted} points.` : 'Sources cleared.');
+        refreshSources();
+    } catch (e) {
+        showToast('Clear failed: ' + e.message, false);
+    }
+}
+
+async function optimizeSources(e, btnEl) {
+    if (isReadOnlyDemo()) {
+        showToast('Optimize is disabled in the read-only demo.', false);
+        return;
+    }
+    const btn = btnEl || (e && e.target && e.target.closest && e.target.closest('button'));
+    const original = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Optimizing...';
+    }
+    try {
+        const res = await fetch('/optimize', { method: 'POST', headers: authHeaders() });
+        if (res.status === 401) {
+            showToast('Unauthorized. Check the operator token.', false);
+            return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        showToast(data.message || 'Optimization triggered.');
+    } catch (e) {
+        showToast('Optimize failed: ' + e.message, false);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = original;
+        }
+    }
+}
+
+async function refreshSources() {
+    const tbody = document.getElementById('sources-list');
+    if (!tbody) return;
+    try {
+        const res = await fetch('/documents', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const docs = await res.json();
+        const badge = document.getElementById('source-status-badge');
+        if (badge) {
+            badge.textContent = `${docs.length} source${docs.length === 1 ? '' : 's'}`;
+            badge.className = 'badge badge-csv';
+        }
+        if (docs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:2rem; color:var(--text-muted);">No indexed sources are visible yet.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = docs.map(d => {
+            let badgeClass = 'badge-txt';
+            if (d.type === 'PDF') badgeClass = 'badge-pdf';
+            if (d.type === 'DOCX') badgeClass = 'badge-docx';
+            if (d.type === 'CSV') badgeClass = 'badge-csv';
+            const docKey = escapeJsString(d.filename || d.id || '');
+            const docId = escapeJsString(d.id || '');
+            const actions = isReadOnlyDemo()
+                ? `<button onclick="viewSourceDocument('${docKey}')" class="btn btn-secondary btn-sm" title="View source">View</button><span class="locked-action">locked</span>`
+                : `<button onclick="deleteSource('${docId}')" class="btn btn-danger btn-sm" title="Delete source">Delete</button><button onclick="viewSourceDocument('${docKey}')" class="btn btn-secondary btn-sm" title="View source">View</button>`;
+            return `
+                <tr>
+                    <td data-label="File"><strong>${escapeHtml(d.filename)}</strong></td>
+                    <td data-label="Type"><span class="badge ${badgeClass}">${escapeHtml(d.type)}</span></td>
+                    <td data-label="Indexed">${escapeHtml(d.uploaded_at || 'N/A')}</td>
+                    <td data-label="Chunks">${escapeHtml(d.chunks)}</td>
+                    <td class="actions-cell">${actions}</td>
+                </tr>`;
+        }).join('');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--danger);">Failed to load sources: ${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+async function deleteSource(id) {
+    if (isReadOnlyDemo()) {
+        showToast('Delete is disabled in the read-only demo.', false);
+        return;
+    }
+    if (!getAdminToken()) {
+        showToast('Private operator token required to delete sources.', false);
+        return;
+    }
+    if (!confirm('Delete this indexed source?')) return;
+    try {
+        const res = await fetch('/document/' + encodeURIComponent(id), { method: 'DELETE', headers: authHeaders() });
+        if (res.status === 401) {
+            showToast('Unauthorized. Check the operator token.', false);
+            return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Source deleted.');
+        refreshSources();
+    } catch (e) {
+        showToast('Delete failed: ' + e.message, false);
+    }
+}
+
+async function viewSourceDocument(key) {
+    try {
+        openSourceModal('Loading...', 'Fetching source...');
+        let res = await fetch('/document/' + encodeURIComponent(key));
+        if (!res.ok) {
+            const listRes = await fetch('/documents');
+            const list = await listRes.json();
+            const found = list.find(d => d.filename === key);
+            if (found) res = await fetch('/document/' + encodeURIComponent(found.id));
+        }
+        if (!res.ok) throw new Error('Source not found');
+        const data = await res.json();
+        openSourceModal(data.filename || key, data.text || '');
+    } catch (e) {
+        openSourceModal('Error', 'Could not load source content. ' + e.message);
+    }
+}
+
+function openSourceModal(title, text) {
+    document.getElementById('source-modal-title').textContent = title;
+    document.getElementById('source-modal-text').textContent = text;
+    document.getElementById('source-modal').classList.add('open');
+}
+
+function closeSourceModal() {
+    document.getElementById('source-modal').classList.remove('open');
+}
+
+document.getElementById('source-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'source-modal') closeSourceModal();
+});
 
 async function pollMetrics() {
     try {
@@ -390,9 +675,11 @@ function applyToChart(id, label, color, series) {
 // ---------- bootstrap ----------
 
 async function bootstrap() {
+    initSourceControls();
     await pollSystem();
     await pollModels();
     await loadPrompt();
+    refreshSources();
     pollConnections();
     pollMetrics();
     pollUsage();

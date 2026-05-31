@@ -293,6 +293,8 @@ async def api_conversations_list():
 @backend_bp.delete('/api/conversations')
 async def api_conversations_clear():
     """Delete ALL chat exchanges. Admin-gated when admin_token is configured."""
+    if demo_is_locked():
+        return jsonify({"error": "read_only_demo"}), 403
     if not _require_admin_token():
         return jsonify({"error": "unauthorized"}), 401
     deleted = await usage_db.delete_all_chats()
@@ -302,6 +304,8 @@ async def api_conversations_clear():
 @backend_bp.delete('/api/conversations/<int:chat_id>')
 async def api_conversations_delete(chat_id: int):
     """Delete a single chat exchange by id. Admin-gated when configured."""
+    if demo_is_locked():
+        return jsonify({"error": "read_only_demo"}), 403
     if not _require_admin_token():
         return jsonify({"error": "unauthorized"}), 401
     ok = await usage_db.delete_chat(chat_id)

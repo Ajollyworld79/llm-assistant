@@ -19,7 +19,7 @@
         <a href="/" class="backend-home">← back to chat</a>
     </div>
     {% if locked %}
-    <div class="lock-banner">LOCKED DEMO &middot; mutations disabled, inspection only</div>
+    <div class="lock-banner">READ-ONLY DEMO &middot; uploads, deletes and model changes are disabled</div>
     {% else %}
     <div class="lock-banner lock-banner-unlocked">UNLOCKED &middot; running in dev mode</div>
     {% endif %}
@@ -33,6 +33,7 @@
     </div>
     <nav class="bk-tabs" role="tablist">
         <button class="bk-tab active" data-tab="overview" onclick="setTab('overview')">Overview</button>
+        <button class="bk-tab" data-tab="sources" onclick="setTab('sources')">Sources</button>
         <button class="bk-tab" data-tab="models" onclick="setTab('models')">Models</button>
         <button class="bk-tab" data-tab="prompt" onclick="setTab('prompt')">Prompt Playground</button>
         <button class="bk-tab" data-tab="usage" onclick="setTab('usage')">Usage History</button>
@@ -45,7 +46,7 @@
 <!-- ====== TAB: OVERVIEW ====== -->
 <section class="bk-tab-panel active" id="tab-overview">
     <h2>System &amp; status</h2>
-    <p class="bk-help">Real-time view of the stack powering Helios. Tiles refresh on each interaction.</p>
+    <p class="bk-help">Real-time inspection of the stack powering Helios. This console exposes state, metrics and configuration without granting write access.</p>
     <div class="tile-grid">
         <div class="tile">
             <div class="tile-label">Primary model</div>
@@ -117,10 +118,90 @@
     </details>
 </section>
 
+<!-- ====== TAB: SOURCES ====== -->
+<section class="bk-tab-panel" id="tab-sources" hidden>
+    <div class="conv-header">
+        <div>
+            <h2>Source Library</h2>
+            <p class="bk-help">Inspect the indexed RAG corpus. In the public demo this surface is read-only; private operator mode can upload, optimize, and delete sources.</p>
+        </div>
+        <div class="conv-actions">
+            {% if not locked %}
+            <button class="conv-btn" onclick="optimizeSources(event, this)">Optimize</button>
+            <button class="conv-btn conv-btn-danger" onclick="clearSources()">Clear all</button>
+            {% endif %}
+            <button class="conv-btn" onclick="refreshSources()">Refresh</button>
+        </div>
+    </div>
+
+    <div class="source-grid">
+        <div class="panel source-control-panel">
+            <h3>{% if locked %}Locked corpus{% else %}Ingest documents{% endif %}</h3>
+            <p>{% if locked %}Uploads are disabled in this public demo so visitors can inspect the system without changing the RAG index.{% else %}Upload handbooks, policies, SOPs, and reference files. Supported: PDF, DOCX, TXT, CSV. Max 10MB per file.{% endif %}</p>
+
+            {% if locked %}
+            <div class="read-only-panel">
+                <div class="read-only-mark">LOCKED</div>
+                <div>
+                    <strong>Mutation endpoints are closed.</strong>
+                    <span>Upload, delete, reset, optimize, and model switching actions return 403 while the demo lock is active.</span>
+                </div>
+            </div>
+            {% else %}
+            <div class="drop-zone" id="source-drop-zone" onclick="document.getElementById('source-file-input').click()">
+                <svg class="icon-upload" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                <div>
+                    <strong>Click to upload</strong> or drag files here
+                </div>
+                <input type="file" id="source-file-input" multiple hidden onchange="handleSourceFileSelect(event)" />
+            </div>
+            <div id="source-upload-queue" class="source-upload-queue" hidden>
+                <h4>Selected files</h4>
+                <div id="source-file-list" class="source-file-list"></div>
+                <button onclick="uploadSources()" id="source-upload-btn" class="btn btn-primary">Start upload</button>
+                <div id="source-upload-progress" class="source-upload-progress"></div>
+            </div>
+            <div class="operator-token">
+                <label class="bk-label">Private operator token</label>
+                <div class="operator-token-row">
+                    <input id="operator-token-input" type="password" placeholder="Bearer token for mutation endpoints">
+                    <button onclick="saveOperatorToken()" class="btn btn-secondary btn-sm">Save</button>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="panel source-list-panel">
+            <div class="section-header">
+                <h3>Indexed sources</h3>
+                <div class="status-indicator">System <span id="source-status-badge" class="badge badge-txt">checking...</span></div>
+            </div>
+            <div class="table-responsive">
+                <table class="doc-table">
+                    <thead>
+                        <tr>
+                            <th>Document Name</th>
+                            <th>Type</th>
+                            <th>Indexed At</th>
+                            <th>Chunks</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sources-list">
+                        <tr><td colspan="5" style="text-align:center; padding: 2rem;">Loading sources...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</section>
+
 <!-- ====== TAB: MODELS ====== -->
 <section class="bk-tab-panel" id="tab-models" hidden>
     <h2>Models</h2>
-    <p class="bk-help">Browse available models. Switching is disabled in the demo.</p>
+    <p class="bk-help">Browse available models and see the active primary/fallback setup. Switching is intentionally disabled in the public demo.</p>
     <div class="model-dropdowns">
         <div class="model-dropdown" id="model-dropdown-primary">
             <button class="model-toggle" onclick="toggleDropdown('primary')">
@@ -145,7 +226,7 @@
 <!-- ====== TAB: PROMPT PLAYGROUND ====== -->
 <section class="bk-tab-panel" id="tab-prompt" hidden>
     <h2>Prompt Playground</h2>
-    <p class="bk-help">Inspect the current system prompt and preview what would be sent to the model. Changes here are not persisted server-side.</p>
+    <p class="bk-help">Inspect the current system prompt and preview what would be sent to the model. This is a local preview only; changes are not persisted server-side.</p>
     <div class="playground-grid">
         <div>
             <label class="bk-label">System prompt</label>
@@ -186,10 +267,16 @@
             <h2>Conversations</h2>
             <p class="bk-help">Recent chat exchanges. Backend: <span id="conv-backend">—</span>. <span id="conv-auth-note"></span></p>
         </div>
+        {% if not locked %}
         <div class="conv-actions">
             <button id="conv-refresh-btn" class="conv-btn" onclick="refreshConversations()">Refresh</button>
             <button id="conv-clear-btn" class="conv-btn conv-btn-danger" onclick="clearAllConversations()">Delete all</button>
         </div>
+        {% else %}
+        <div class="conv-actions">
+            <button id="conv-refresh-btn" class="conv-btn" onclick="refreshConversations()">Refresh</button>
+        </div>
+        {% endif %}
     </div>
     <div class="conv-table-wrap">
         <table class="conv-table" id="conv-table">
@@ -216,6 +303,17 @@
 
 </main>
 
+<div id="source-modal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-header">
+            <span id="source-modal-title">Document Viewer</span>
+            <button onclick="closeSourceModal()" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body" id="source-modal-text"></div>
+    </div>
+</div>
+
+<script>window.HELIOS_READ_ONLY = {{ 'true' if locked else 'false' }};</script>
 <script src="/static/backend.js?v={{ asset_v }}"></script>
 </body>
 </html>
