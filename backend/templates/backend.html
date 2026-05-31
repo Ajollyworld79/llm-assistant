@@ -46,6 +46,33 @@
 <section class="bk-tab-panel active" id="tab-overview">
     <h2>System &amp; status</h2>
     <p class="bk-help">Real-time inspection of the stack powering Helios. This console exposes state, metrics and configuration without granting write access.</p>
+
+    <div class="runtime-pipeline" aria-label="Runtime pipeline">
+        <div class="pipeline-step">
+            <span class="pipeline-kicker">Ingress</span>
+            <strong>Chat UI</strong>
+            <small>Browser session</small>
+        </div>
+        <div class="pipeline-link"></div>
+        <div class="pipeline-step">
+            <span class="pipeline-kicker">App</span>
+            <strong>Quart ASGI</strong>
+            <small id="runtime-provider">provider sync</small>
+        </div>
+        <div class="pipeline-link"></div>
+        <div class="pipeline-step">
+            <span class="pipeline-kicker">Retrieve</span>
+            <strong id="runtime-embed">Embedding</strong>
+            <small><span id="runtime-qdrant-points">—</span> vector points</small>
+        </div>
+        <div class="pipeline-link"></div>
+        <div class="pipeline-step">
+            <span class="pipeline-kicker">Reason</span>
+            <strong id="runtime-primary">Primary LLM</strong>
+            <small>streamed response</small>
+        </div>
+    </div>
+
     <div class="tile-grid">
         <div class="tile">
             <div class="tile-label">Primary model</div>
@@ -92,22 +119,58 @@
     </div>
 
     <h3 class="bk-subheading">Live metrics</h3>
-    <div class="metrics-grid">
-        <div class="metric-big">
-            <div class="metric-label">Memory</div>
+    <div class="metric-scope-grid">
+        <div class="metric-scope">
+            <div class="metric-topline">
+                <span class="metric-label">Memory</span>
+                <span class="metric-unit">process</span>
+            </div>
             <div class="metric-value"><span id="m-memory">—</span> <small>MB</small></div>
+            <div class="metric-bar" aria-hidden="true"><span id="g-memory-bar"></span></div>
+            <div class="metric-meta" id="g-memory-meta">Measured against a 1 GB soft ceiling</div>
         </div>
-        <div class="metric-big">
-            <div class="metric-label">Avg latency</div>
+        <div class="metric-scope">
+            <div class="metric-topline">
+                <span class="metric-label">Avg latency</span>
+                <span class="metric-unit">rolling</span>
+            </div>
             <div class="metric-value"><span id="m-latency">—</span> <small>ms</small></div>
+            <div class="metric-bar metric-bar-warm" aria-hidden="true"><span id="g-latency-bar"></span></div>
+            <div class="metric-meta" id="g-latency-meta">Target under 3,000 ms</div>
         </div>
-        <div class="metric-big">
-            <div class="metric-label">Cache hit (session)</div>
+        <div class="metric-scope">
+            <div class="metric-topline">
+                <span class="metric-label">Cache hit</span>
+                <span class="metric-unit">session</span>
+            </div>
             <div class="metric-value"><span id="m-cache">—</span> <small>%</small></div>
+            <div class="metric-bar metric-bar-cool" aria-hidden="true"><span id="g-cache-bar"></span></div>
+            <div class="metric-meta" id="g-cache-meta">Prompt/model cache efficiency</div>
         </div>
-        <div class="metric-big">
-            <div class="metric-label">Requests total</div>
+        <div class="metric-scope">
+            <div class="metric-topline">
+                <span class="metric-label">Requests total</span>
+                <span class="metric-unit">traffic</span>
+            </div>
             <div class="metric-value"><span id="m-requests">—</span></div>
+            <div class="metric-spark" aria-hidden="true">
+                <span></span><span></span><span></span><span></span><span id="g-requests-bar"></span>
+            </div>
+            <div class="metric-meta" id="g-requests-meta">Lifetime request counter</div>
+        </div>
+        <div class="metric-scope metric-scope-wide">
+            <div class="metric-topline">
+                <span class="metric-label">Token budget</span>
+                <span class="metric-unit">daily guardrail</span>
+            </div>
+            <div class="budget-readout">
+                <div class="metric-value metric-value-tight" id="g-token-readout">— / —</div>
+                <div class="budget-ring" aria-hidden="true">
+                    <span id="g-token-ring"></span>
+                </div>
+            </div>
+            <div class="metric-bar metric-bar-budget" aria-hidden="true"><span id="g-token-bar"></span></div>
+            <div class="metric-meta" id="g-token-meta">Resets after the daily window</div>
         </div>
     </div>
 

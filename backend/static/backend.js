@@ -1,5 +1,5 @@
 // Backend viewer — polling-based dashboard
-// All endpoints are read-only. No write actions are possible from this page.
+// Public demo actions are read-only; private operator mode can perform guarded writes.
 
 // ---------- top tabs ----------
 function setTab(name) {
@@ -165,6 +165,28 @@ function setText(id, value) {
     if (el) el.textContent = value === undefined || value === null ? '—' : String(value);
 }
 
+function clampPct(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(100, n));
+}
+
+function setWidth(id, pct) {
+    const el = document.getElementById(id);
+    if (el) el.style.width = `${clampPct(pct)}%`;
+}
+
+function setSparkHeight(id, pct) {
+    const el = document.getElementById(id);
+    if (el) el.style.height = `${Math.max(10, clampPct(pct))}%`;
+}
+
+function setRing(id, pct) {
+    const el = document.getElementById(id);
+    const ring = el?.parentElement;
+    if (ring) ring.style.setProperty('--budget-deg', `${clampPct(pct) * 3.6}deg`);
+}
+
 function showToast(message, success = true, duration = 4000) {
     const existing = document.getElementById('toast');
     if (existing) existing.remove();
@@ -182,8 +204,8 @@ function showToast(message, success = true, duration = 4000) {
 function setDot(id, color) {
     const el = document.getElementById(id);
     if (!el) return;
-    el.classList.remove('tile-dot-green', 'tile-dot-yellow', 'tile-dot-red');
-    if (color) el.classList.add(`tile-dot-${color}`);
+    el.classList.remove('tile-dot-green', 'tile-dot-yellow', 'tile-dot-amber', 'tile-dot-red');
+    if (color) el.classList.add(`tile-dot-${color === 'yellow' ? 'amber' : color}`);
 }
 
 async function jget(path) {
@@ -220,6 +242,9 @@ async function pollSystem() {
         setText('tile-region', s.llm_provider);
         setText('tile-git-sha', s.git_sha);
         setText('tile-uptime', `uptime ${humanSeconds(s.uptime_seconds)}`);
+        setText('runtime-provider', s.llm_provider);
+        setText('runtime-embed', truncate(s.embedding_model, 28));
+        setText('runtime-primary', truncate(s.model_primary, 28));
         document.getElementById('config-pre').textContent = JSON.stringify(s.config, null, 2);
     } catch (e) {
         console.warn('pollSystem failed', e);
@@ -254,7 +279,10 @@ async function pollConnections() {
         });
         // Tile dots
         setDot('tile-qdrant-dot', c.qdrant?.status === 'up' ? 'green' : 'red');
-        setText('tile-qdrant-points', c.qdrant?.points_count ?? '—');
+        const qdrantPoints = c.qdrant?.points_count;
+        const qdrantLabel = typeof qdrantPoints === 'number' ? qdrantPoints.toLocaleString('da-DK') : (qdrantPoints ?? '—');
+        setText('tile-qdrant-points', qdrantLabel);
+        setText('runtime-qdrant-points', qdrantLabel);
         setDot('tile-embed-dot', ['loaded', 'configured'].includes(c.embedding_model?.status) ? 'green' : 'yellow');
         const geminiColor = c.gemini?.status === 'up' ? 'green' : (c.gemini?.status === 'unconfigured' ? 'yellow' : 'red');
         setDot('tile-primary-dot', geminiColor);
@@ -512,18 +540,36 @@ document.getElementById('source-modal')?.addEventListener('click', (e) => {
 async function pollMetrics() {
     try {
         const m = await jget('/backend/api/metrics');
-        setText('m-memory', (m.memory_mb || 0).toFixed(0));
-        setText('m-latency', (m.avg_latency_ms || 0).toFixed(0));
-        setText('m-cache', m.cache_hit_ratio_pct);
-        setText('m-requests', m.requests_total);
+        const memoryMb = Number(m.memory_mb || 0);
+        const latencyMs = Number(m.avg_latency_ms || 0);
+        const cachePct = Number(m.cache_hit_ratio_pct || 0);
+        const requestsTotal = Number(m.requests_total || 0);
+
+        setText('m-memory', memoryMb.toFixed(0));
+        setText('m-latency', latencyMs.toFixed(0));
+        setText('m-cache', cachePct.toFixed(0));
+        setText('m-requests', requestsTotal.toLocaleString('da-DK'));
         setText('tile-cache-ratio', `${m.cache_hit_ratio_pct}%`);
         setText('tile-fallback-count', m.fallback_invocations);
+        setWidth('g-memory-bar', (memoryMb / 1024) * 100);
+        setWidth('g-latency-bar', (latencyMs / 3000) * 100);
+        setWidth('g-cache-bar', cachePct);
+        setSparkHeight('g-requests-bar', (Math.log10(requestsTotal + 1) / 3) * 100);
+        setText('g-memory-meta', `${memoryMb.toFixed(0)} MB of a 1 GB soft ceiling`);
+        setText('g-latency-meta', latencyMs > 3000 ? 'Above 3,000 ms target' : 'Target under 3,000 ms');
+        setText('g-cache-meta', `${cachePct.toFixed(0)}% prompt/model cache reuse`);
+        setText('g-requests-meta', `${requestsTotal.toLocaleString('da-DK')} handled requests`);
 
         const rl = m.rate_limit || {};
         const used = rl.tokens_used_today || 0;
         const budget = rl.daily_token_budget || 0;
         setText('tile-tokens-used', `${used.toLocaleString('da-DK')} / ${budget.toLocaleString('da-DK')}`);
         setText('tile-budget-reset', shortIso(rl.budget_resets_at));
+        setText('g-token-readout', `${used.toLocaleString('da-DK')} / ${budget.toLocaleString('da-DK')}`);
+        const budgetPct = budget > 0 ? (used / budget) * 100 : 0;
+        setWidth('g-token-bar', budgetPct);
+        setRing('g-token-ring', budgetPct);
+        setText('g-token-meta', `${clampPct(budgetPct).toFixed(0)}% used. Resets ${shortIso(rl.budget_resets_at)}`);
         let budgetColor = 'green';
         if (budget > 0) {
             const ratio = used / budget;
