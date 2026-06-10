@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Helios — Support, on demand</title>
+    <title>Helios — Internal AI Assistant</title>
     <link rel="stylesheet" href="/static/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script defer src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 </head>
 <body>
     <button class="menu-toggle" aria-label="Open menu" onclick="toggleSidebar()">
@@ -25,28 +25,79 @@
                     <path stroke-linecap="round" stroke-width="2" d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/>
                 </svg>
                 <span>Helios</span>
+                <span class="brand-env">{% if demo_mode %}Demo{% else %}Internal{% endif %}</span>
             </div>
 
+            <button class="new-chat-btn" onclick="newConversation()">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                New conversation
+                <kbd>⌘K</kbd>
+            </button>
+
             <nav>
+                <div class="nav-section-label">Workspace</div>
                 <div class="nav-item active" onclick="setView('chat')" id="nav-chat">
                     <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                     </svg>
-                    Ask Helios
+                    Assistant
                 </div>
+                <a class="nav-item" href="/backend">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    Operations Console
+                </a>
             </nav>
 
+            <div class="side-status" id="side-status" aria-live="polite">
+                <div class="side-status-title">System status</div>
+                <div class="side-status-row">
+                    <span>Engine</span>
+                    <span class="value" data-status="engine">—</span>
+                </div>
+                <div class="side-status-row">
+                    <span>Vector index</span>
+                    <span class="value" data-status="qdrant">—</span>
+                </div>
+                <div class="side-status-row">
+                    <span>Service</span>
+                    <span class="value" style="display:inline-flex;align-items:center;gap:6px">
+                        <span class="status-dot pulse" id="health-dot"></span>
+                        <span data-status="overall">checking…</span>
+                    </span>
+                </div>
+            </div>
+
             <div class="gdpr-sidebar">
-                <div class="gdpr-sidebar-title">Read-only operations</div>
-                <a class="gdpr-link" href="/backend">Admin Console →</a>
+                <div class="gdpr-sidebar-title">Helios · RAG over internal docs</div>
+                <a class="gdpr-link" href="/backend">
+                    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    Admin Console
+                </a>
             </div>
         </aside>
 
         <!-- Main Content -->
         <main class="main-content">
             <div class="top-nav" role="navigation" aria-label="Mobile navigation">
-                <div class="nav-item" onclick="setView('chat')" id="nav-chat-mobile">Chat Assistant</div>
+                <div class="nav-item" onclick="setView('chat')" id="nav-chat-mobile">Assistant</div>
             </div>
+
+            <header class="page-header">
+                <span class="page-title">Support Assistant</span>
+                <span class="page-sub">Answers grounded in your internal knowledge base</span>
+                <div class="header-right">
+                    {% if locked %}<span class="env-chip">Read-only demo</span>{% endif %}
+                    <span class="health-pill">
+                        <span class="status-dot pulse" id="header-health-dot"></span>
+                        <span id="header-health-text">connecting</span>
+                    </span>
+                </div>
+            </header>
+
             {% if demo_mode %}
             <div id="demo-banner" class="demo-banner">
                 <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -67,7 +118,8 @@
                 <div class="chat-container">
                     <div class="chat-history" id="chat-history">
                         <section id="welcome-hero" class="welcome-hero">
-                            <h1>Ask Helios about <em>IT support</em>.</h1>
+                            <div class="welcome-kicker">Helios · Internal Support Agent</div>
+                            <h1>How can I help you <em>today</em>?</h1>
                             <p>{{ welcome_prompt|trim }}</p>
                             <div class="welcome-suggestions">
                                 <button type="button" class="suggestion" onclick="askSuggestion('What can this support assistant help me with?')">
@@ -94,28 +146,33 @@
                         </section>
                     </div>
 
-                    <div id="chat-attachments" class="chat-attachments" hidden></div>
-                    <div class="input-area">
-                        <textarea id="query-input" placeholder="Ask anything…" onkeypress="handleKeyPress(event)"></textarea>
-                        <input type="file" id="chat-file-input" multiple style="display:none"
-                               accept=".png,.jpg,.jpeg,.webp,.gif"
-                               onchange="handleChatFileSelect(event)" />
-                        <button onclick="document.getElementById('chat-file-input').click()"
-                                id="attach-btn" class="btn btn-secondary" title="Attach document or image">
-                            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                            </svg>
-                        </button>
-                        <button onclick="doSearch()" id="send-btn" class="btn btn-primary">
-                            <span id="send-icon">
-                                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9-2-9-18-9 18 9-2zm0 0v-8" />
+                    <div class="input-zone">
+                        <div id="chat-attachments" class="chat-attachments" hidden></div>
+                        <div class="input-area">
+                            <textarea id="query-input" placeholder="Ask about IT, policies, troubleshooting…" rows="1" onkeypress="handleKeyPress(event)"></textarea>
+                            <input type="file" id="chat-file-input" multiple style="display:none"
+                                   accept=".png,.jpg,.jpeg,.webp,.gif"
+                                   onchange="handleChatFileSelect(event)" />
+                            <button onclick="document.getElementById('chat-file-input').click()"
+                                    id="attach-btn" class="icon-btn" title="Attach an image for analysis">
+                                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                          d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                                 </svg>
-                            </span>
-                            <span id="send-spinner" class="spinner" style="display:none"></span>
-                            Send
-                        </button>
+                            </button>
+                            <button onclick="doSearch()" id="send-btn" class="send-btn" title="Send (Enter)">
+                                <span id="send-icon">
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                                    </svg>
+                                </span>
+                                <span id="send-spinner" class="spinner" style="display:none"></span>
+                            </button>
+                        </div>
+                        <div class="composer-hint">
+                            <span class="hint-keys"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</span>
+                            <span>Responses are AI-generated — verify critical information.</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -137,6 +194,11 @@
         const BASE = ''; // Relative path
         const PUBLIC_DEMO_LOCKED = {{ 'true' if locked else 'false' }};
 
+        const BOT_AVATAR_SVG = `<svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <circle cx="12" cy="12" r="4" stroke-width="2"/>
+            <path stroke-linecap="round" stroke-width="2" d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/>
+        </svg>`;
+
         function getThreadId() {
             let t = localStorage.getItem('chat_thread_id');
             if (!t) {
@@ -147,35 +209,77 @@
             return t;
         }
 
+        function newConversation() {
+            localStorage.removeItem('chat_thread_id');
+            const history = document.getElementById('chat-history');
+            history.querySelectorAll('.message').forEach(el => el.remove());
+            const hero = document.getElementById('welcome-hero');
+            if (hero) hero.style.display = '';
+            document.getElementById('query-input').focus();
+            if (window.innerWidth <= 768) closeSidebar();
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+                e.preventDefault();
+                newConversation();
+            }
+        });
+
         // Init
         checkHealth();
-        
+
         function setView(view) {
             document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            
+
             document.getElementById('view-' + view).classList.add('active');
             document.getElementById('nav-' + view).classList.add('active');
             const mobileNav = document.getElementById('nav-' + view + '-mobile');
             if (mobileNav) mobileNav.classList.add('active');
-            
+
             if (view === 'admin') refreshDocs();
-            
+
             // Always close mobile sidebar after navigation to reveal content
             if (window.innerWidth <= 768) {
                 closeSidebar();
             }
         }
 
+        function setStatusValue(key, text) {
+            const el = document.querySelector(`[data-status="${key}"]`);
+            if (el) el.textContent = text;
+        }
+
         async function checkHealth() {
+            const headerDot = document.getElementById('header-health-dot');
+            const headerText = document.getElementById('header-health-text');
+            const sideDot = document.getElementById('health-dot');
             try {
                 const res = await fetch(BASE + '/health');
                 const data = await res.json();
                 if (data.demo) {
-                    document.getElementById('demo-banner').style.display = 'flex';
+                    const banner = document.getElementById('demo-banner');
+                    if (banner) banner.style.display = 'flex';
                 }
+                const comps = data.components || {};
+                const gemini = (comps.gemini || {}).status === 'healthy';
+                const qdrant = (comps.qdrant || {}).status === 'healthy';
+                setStatusValue('engine', gemini ? 'Gemini · live' : 'simulated');
+                const points = (comps.qdrant || {}).points_count;
+                setStatusValue('qdrant', qdrant ? ('Qdrant' + (points != null ? ` · ${points} pts` : '')) : 'in-memory');
+                const healthy = data.status === 'healthy';
+                setStatusValue('overall', healthy ? 'operational' : 'degraded');
+                const cls = healthy ? 'status-dot ok' : 'status-dot warn';
+                if (headerDot) headerDot.className = cls;
+                if (sideDot) sideDot.className = cls;
+                if (headerText) headerText.textContent = healthy ? 'All systems operational' : 'Degraded';
             } catch (e) {
                 console.error("Health check failed", e);
+                setStatusValue('overall', 'offline');
+                if (headerDot) headerDot.className = 'status-dot err';
+                if (sideDot) sideDot.className = 'status-dot err';
+                if (headerText) headerText.textContent = 'Unreachable';
             }
         }
 
@@ -188,6 +292,13 @@
             }
         }
 
+        // Auto-grow the composer textarea
+        const queryInput = document.getElementById('query-input');
+        queryInput.addEventListener('input', () => {
+            queryInput.style.height = 'auto';
+            queryInput.style.height = Math.min(queryInput.scrollHeight, 200) + 'px';
+        });
+
         // Chat attachments are image-only. Document ingestion lives in /backend.
         let chatAttachments = [];
         const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
@@ -196,7 +307,7 @@
             const files = Array.from(e.target.files || []);
             const imageFiles = files.filter(f => IMAGE_EXTS.includes((f.name.split('.').pop() || '').toLowerCase()));
             if (imageFiles.length !== files.length) {
-                showToast('Document ingestion has moved to the backend console. Images can still be attached here for analysis.', false);
+                showToast('Document ingestion has moved to the Operations Console. Images can still be attached here for analysis.', false);
             }
             chatAttachments = chatAttachments.concat(imageFiles);
             renderChatAttachments();
@@ -238,6 +349,27 @@
             });
         }
 
+        function showTyping() {
+            removeTyping();
+            const history = document.getElementById('chat-history');
+            const div = document.createElement('div');
+            div.className = 'message bot';
+            div.id = 'typing-message';
+            div.innerHTML = `
+                <div class="msg-avatar">${BOT_AVATAR_SVG}</div>
+                <div class="msg-main">
+                    <div class="message-label">Helios <span class="label-tag">Assistant</span></div>
+                    <div class="typing-indicator" aria-label="Helios is thinking"><span></span><span></span><span></span></div>
+                </div>`;
+            history.appendChild(div);
+            history.scrollTop = history.scrollHeight;
+        }
+
+        function removeTyping() {
+            const el = document.getElementById('typing-message');
+            if (el) el.remove();
+        }
+
         async function doSearch() {
             const input = document.getElementById('query-input');
             const query = input.value.trim();
@@ -249,6 +381,7 @@
                 : query;
             addMessage('user', userLabel);
             input.value = '';
+            input.style.height = 'auto';
 
             const attached = chatAttachments.slice();
             chatAttachments = [];
@@ -260,6 +393,7 @@
             btn.disabled = true;
             icon.style.display = 'none';
             spinner.style.display = 'inline-block';
+            showTyping();
 
             try {
                 const imagePayload = [];
@@ -282,17 +416,24 @@
                     body: JSON.stringify(body)
                 });
                 if (res.status === 401) {
+                    removeTyping();
                     addMessage('bot', 'Søgning kræver et access token. Kontakt ejeren for adgang til den private demo.');
                     return;
                 }
                 const data = await res.json().catch(() => ({}));
+                removeTyping();
                 if (!res.ok) {
                     addMessage('bot', `Søgning fejlede (${res.status}): ${data.error || 'unknown error'}`);
                     return;
                 }
                 const answer = data.answer || data.message || 'Her er de mest relevante resultater fra dine dokumenter:';
-                addMessage('bot', answer, data.results);
+                addMessage('bot', answer, data.results, {
+                    total_ms: data.total_ms,
+                    ai_ms: data.ai_ms,
+                    sources: (data.sources || []).length
+                });
             } catch (e) {
+                removeTyping();
                 addMessage('bot', 'Sorry, an error occurred while searching: ' + e.message);
             } finally {
                 btn.disabled = false;
@@ -315,7 +456,7 @@
             }
         }
 
-        function addMessage(type, text, results = null) {
+        function addMessage(type, text, results = null, meta = null) {
             // Hide welcome hero on first interaction
             const hero = document.getElementById('welcome-hero');
             if (hero) hero.style.display = 'none';
@@ -341,9 +482,28 @@
                 contentHtml += `<div class="results-grid">${cardsHtml}</div>`;
             }
 
+            if (type === 'bot' && meta && meta.total_ms != null) {
+                const secs = (meta.total_ms / 1000).toFixed(1);
+                const parts = [
+                    `<span class="meta-item"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>${secs}s</span>`
+                ];
+                if (meta.sources) parts.push(`<span class="meta-item">${meta.sources} source${meta.sources === 1 ? '' : 's'}</span>`);
+                contentHtml += `<div class="msg-meta">${parts.join('<span>·</span>')}</div>`;
+            }
+
+            const label = type === 'user'
+                ? `<div class="message-label">You</div>`
+                : `<div class="message-label">Helios <span class="label-tag">Assistant</span></div>`;
+            const avatar = type === 'user'
+                ? `<div class="msg-avatar">You</div>`
+                : `<div class="msg-avatar">${BOT_AVATAR_SVG}</div>`;
+
             msgDiv.innerHTML = `
-                <div class="message-label">${type === 'user' ? 'You' : 'Helios'}</div>
-                ${contentHtml}
+                ${avatar}
+                <div class="msg-main">
+                    ${label}
+                    ${contentHtml}
+                </div>
             `;
 
             history.appendChild(msgDiv);
@@ -391,9 +551,9 @@
                         res = await fetch(BASE + `/document/${found.id}`);
                     }
                 }
-                
+
                 if (!res.ok) throw new Error("Document not found");
-                
+
                 const data = await res.json();
                 openModal(data.filename, data.text);
             } catch (e) {
@@ -406,11 +566,11 @@
             document.getElementById('modal-text').textContent = text;
             document.getElementById('doc-modal').classList.add('open');
         }
-        
+
         function closeModal() {
             document.getElementById('doc-modal').classList.remove('open');
         }
-        
+
         // Close modal on backdrop click
         document.getElementById('doc-modal').addEventListener('click', (e) => {
             if (e.target.id === 'doc-modal') closeModal();
@@ -422,7 +582,7 @@
             const backdrop = document.querySelector('.sidebar-backdrop');
             if (!sb) return;
             const isOpen = sb.classList.contains('open');
-            
+
             if (isOpen) {
                 sb.classList.remove('open');
                 backdrop && backdrop.classList.remove('show');
@@ -435,7 +595,7 @@
                 }
             }
         }
-        
+
         function closeSidebar() {
             const sb = document.querySelector('.sidebar');
             const backdrop = document.querySelector('.sidebar-backdrop');
@@ -445,17 +605,17 @@
             // Re-enable body scroll
             document.body.style.overflow = '';
         }
-        
+
         // Close sidebar when clicking backdrop
         document.querySelector('.sidebar-backdrop')?.addEventListener('click', closeSidebar);
-        
+
         // Ensure sidebar is closed when resizing to desktop
-        window.addEventListener('resize', () => { 
+        window.addEventListener('resize', () => {
             if (window.innerWidth > 768) {
                 closeSidebar();
             }
         });
-        
+
         // Close sidebar on Escape key
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && window.innerWidth <= 768) {
@@ -465,14 +625,5 @@
 
     </script>
 
-    <div id="corner-credits" class="corner-credits" aria-hidden="true">Helios &middot; <span id="corner-year"></span> &middot; an editorial demo</div>
-    <script>
-      // Populate dynamic year for corner credits
-      (function() {
-        try {
-          document.getElementById('corner-year').textContent = new Date().getFullYear();
-        } catch(e) { /* ignore in older browsers */ }
-      })();
-    </script>
 </body>
 </html>
