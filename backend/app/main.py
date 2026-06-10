@@ -236,20 +236,27 @@ async def health():
             "components": {},
         }
 
-        # API monitor summary if available
+        # API monitor summary if available. Kept under its own key — the
+        # monitor flags soft issues (recent restart, error-rate spikes) that
+        # must not overwrite the overall service status.
         try:
             if hasattr(monitor, 'get_health_summary'):
                 monitor_summary = monitor.get_health_summary()
-                basic_health.update(monitor_summary)
+                basic_health['metrics'] = monitor_summary.get('metrics')
+                basic_health['monitor'] = {
+                    'status': monitor_summary.get('status'),
+                    'issues': monitor_summary.get('issues', []),
+                }
             else:
                 basic_health['metrics'] = monitor.get_stats()
         except Exception as e:
             logger.warning(f"Failed to get api monitor health: {e}")
 
-        # Qdrant: client presence and collection readiness
+        # Qdrant: client presence and collection readiness. No client means the
+        # in-memory fallback store is active — functional, just not persistent.
         try:
             qdrant_info = {
-                "status": "healthy" if lifecycle.qdrant_client else "unavailable",
+                "status": "healthy" if lifecycle.qdrant_client else "fallback_in_memory",
                 "collection_ready": getattr(qdrant_service, 'collection_ready', False),
             }
             if qdrant_info["collection_ready"] and lifecycle.qdrant_client:
@@ -267,9 +274,15 @@ async def health():
         except Exception as e:
             basic_health["components"]["qdrant"] = {"status": "error", "error": str(e)}
 
-        # Gemini availability (best-effort)
+        # Gemini availability (best-effort). In demo mode the simulated LLM is
+        # the expected engine, so a missing key is not a failure there.
         try:
-            gemini_status = "healthy" if getattr(settings, 'gemini_api_key', None) else "unavailable"
+            if getattr(settings, 'gemini_api_key', None):
+                gemini_status = "healthy"
+            elif settings.demo:
+                gemini_status = "simulated"
+            else:
+                gemini_status = "unavailable"
             basic_health["components"]["gemini"] = {"status": gemini_status}
         except Exception as e:
             basic_health["components"]["gemini"] = {"status": "error", "error": str(e)}
@@ -279,7 +292,9 @@ async def health():
         except Exception as e:
             basic_health["components"]["database"] = {"status": "error", "error": str(e)}
 
-        # Determine overall status
+        # Determine overall status: degrade only on real failures, not on
+        # designed fallback modes (in-memory store, demo LLM) or soft monitor
+        # warnings like a recent restart.
         component_statuses = [c.get("status") for c in basic_health["components"].values()]
         if "error" in component_statuses or "unavailable" in component_statuses:
             basic_health["status"] = "degraded"
