@@ -6,8 +6,9 @@ uvicorn[standard]==0.52.1
 # Gemini (free Google AI Studio API, async-capable)
 google-genai==2.16.0
 
-# Vector DB
-qdrant-client==1.19.0
+# Vector DB — must be >= the version that last wrote /app/qdrant_data: older
+# clients cannot read newer local-storage metadata (id_tracker field).
+qdrant-client==1.20.0
 
 # Embeddings: ONNX-based, no torch (used when EMBEDDING_PROVIDER=fastembed)
 fastembed==0.8.0
