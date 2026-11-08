@@ -13,6 +13,7 @@ Endpoints:
   /backend/api/models  -> model catalog with primary/fallback annotation
   /backend/api/usage/summary    -> top-line history
   /backend/api/usage/timeseries -> bucketed series for charts
+  /backend/api/conversations    -> paged chat history (admin only)
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ try:
     from ..module.model_catalog import catalog_for_viewer
     from ..module.config_view import safe_config_dict
     from ..module.usage_db import usage_db
+    from ..module.auth import is_admin_request
     from ..services.prompt import SYSTEM_PROMPT, CHAT_ANSWER_SCHEMA
 except ImportError:
     import sys as _sys, os as _os
@@ -47,6 +49,7 @@ except ImportError:
     from module.model_catalog import catalog_for_viewer
     from module.config_view import safe_config_dict
     from module.usage_db import usage_db
+    from module.auth import is_admin_request
     from services.prompt import SYSTEM_PROMPT, CHAT_ANSWER_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -102,14 +105,7 @@ async def api_connections():
     qdrant_ok = lifecycle.qdrant_client is not None
     points_count = None
     if qdrant_ok:
-        try:
-            import asyncio
-            count_obj = await asyncio.to_thread(
-                lifecycle.qdrant_client.count, collection_name=settings.qdrant_collection
-            )
-            points_count = getattr(count_obj, 'count', None)
-        except Exception:
-            points_count = None
+        points_count = await _cached_count("qdrant", _qdrant_count)
     out["qdrant"] = {
         "status": "up" if qdrant_ok else "down",
         "points_count": points_count,
@@ -180,18 +176,7 @@ async def api_connections():
 
     # Chat DB — same postgres pool, but report row count from chat_events so
     # the operator can confirm conversations are persisting.
-    chat_count = None
-    if usage_db.backend_kind == "postgres":
-        try:
-            async with usage_db._pool.acquire() as conn:  # type: ignore
-                chat_count = int(await conn.fetchval("SELECT count(*) FROM chat_events"))
-        except Exception:
-            chat_count = None
-    else:
-        try:
-            chat_count = len(usage_db._mem_chats)
-        except Exception:
-            chat_count = None
+    chat_count = await _cached_count("chat_events", _chat_count)
     out["chat_db"] = {
         "status": "up" if usage_db.backend_kind == "postgres" else "memory_fallback",
         "backend": usage_db.backend_kind,
@@ -273,27 +258,27 @@ async def api_usage_timeseries():
     return jsonify({"metric": metric, "range": range_label, "series": series})
 
 
-def _require_admin_token() -> bool:
-    """Return True if request is authorized to mutate. When admin_token is unset
-    (e.g. local dev), no auth is required."""
-    expected = getattr(settings, 'admin_token', None)
-    if not expected:
-        return True
-    auth = request.headers.get('Authorization', '')
-    if not auth.startswith('Bearer '):
-        return False
-    return auth.split(' ', 1)[1].strip() == expected
-
-
 @backend_bp.get('/api/conversations')
 async def api_conversations_list():
-    """List recent chat exchanges. Read-only — no auth required."""
+    """Paged chat history. Admin-only: contains user questions and answers."""
+    if not is_admin_request():
+        return jsonify({"error": "unauthorized"}), 401
     try:
-        limit = int(request.args.get('limit', 200))
+        limit = int(request.args.get('limit', 50))
     except (TypeError, ValueError):
-        limit = 200
-    items = await usage_db.list_chats(limit=limit)
-    return jsonify({"items": items, "backend": usage_db.backend_kind})
+        limit = 50
+    before_raw = request.args.get('before_id')
+    try:
+        before_id = int(before_raw) if before_raw not in (None, '') else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid_before_id"}), 400
+    q = (request.args.get('q') or '').strip() or None
+    try:
+        page = await usage_db.list_chats(limit=limit, before_id=before_id, q=q)
+    except Exception:
+        logger.error("conversations list failed", exc_info=True)
+        return jsonify({"error": "conversations_unavailable"}), 500
+    return jsonify({**page, "backend": usage_db.backend_kind})
 
 
 @backend_bp.delete('/api/conversations')
@@ -301,7 +286,7 @@ async def api_conversations_clear():
     """Delete ALL chat exchanges. Admin-gated when admin_token is configured."""
     if demo_is_locked():
         return jsonify({"error": "read_only_demo"}), 403
-    if not _require_admin_token():
+    if not is_admin_request():
         return jsonify({"error": "unauthorized"}), 401
     deleted = await usage_db.delete_all_chats()
     return jsonify({"deleted": deleted})
@@ -312,13 +297,47 @@ async def api_conversations_delete(chat_id: int):
     """Delete a single chat exchange by id. Admin-gated when configured."""
     if demo_is_locked():
         return jsonify({"error": "read_only_demo"}), 403
-    if not _require_admin_token():
+    if not is_admin_request():
         return jsonify({"error": "unauthorized"}), 401
     ok = await usage_db.delete_chat(chat_id)
     return jsonify({"deleted": 1 if ok else 0})
 
 
 # ---- helpers --------------------------------------------------------------
+
+_COUNT_TTL_S = 30.0
+_COUNT_CACHE: Dict[str, Any] = {}
+
+
+async def _cached_count(key: str, fn):
+    """Cache an expensive count for 30s (failures are cached too, as None)."""
+    now = time.monotonic()
+    hit = _COUNT_CACHE.get(key)
+    if hit and now - hit[0] < _COUNT_TTL_S:
+        return hit[1]
+    try:
+        value = await fn()
+    except Exception:
+        logger.debug("count %s failed", key, exc_info=True)
+        value = None
+    _COUNT_CACHE[key] = (now, value)
+    return value
+
+
+async def _qdrant_count():
+    import asyncio
+    count_obj = await asyncio.to_thread(
+        lifecycle.qdrant_client.count, collection_name=settings.qdrant_collection
+    )
+    return getattr(count_obj, 'count', None)
+
+
+async def _chat_count():
+    if usage_db.backend_kind == "postgres":
+        async with usage_db._pool.acquire() as conn:  # type: ignore
+            return int(await conn.fetchval("SELECT count(*) FROM chat_events"))
+    return len(usage_db._mem_chats)
+
 
 def _now_iso() -> str:
     import datetime

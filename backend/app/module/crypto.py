@@ -25,20 +25,25 @@ logger = logging.getLogger(__name__)
 _CIPHERTEXT_PREFIX = "enc:v1:"
 
 
+_warned_bad_key = False
+
+
 def _get_key() -> Optional[bytes]:
+    """Return the 32-byte key, or None when unset/invalid (encryption disabled)."""
+    global _warned_bad_key
     raw = os.getenv("PAYLOAD_ENCRYPTION_KEY", "").strip()
     if not raw:
         return None
-    # Accept either base64 (32 bytes decoded) or raw 32-char passphrase
     try:
         decoded = base64.b64decode(raw, validate=True)
         if len(decoded) == 32:
             return decoded
     except Exception:
         pass
-    # Fallback: hash a non-base64 passphrase to 32 bytes
-    from hashlib import sha256
-    return sha256(raw.encode("utf-8")).digest()
+    if not _warned_bad_key:
+        _warned_bad_key = True
+        logger.error("PAYLOAD_ENCRYPTION_KEY is not base64 of exactly 32 bytes; payload encryption is DISABLED")
+    return None
 
 
 def is_enabled() -> bool:
@@ -56,15 +61,15 @@ def encrypt_text(plaintext: str) -> str:
     key = _get_key()
     if key is None:
         return plaintext
-    try:
-        nonce = get_random_bytes(12)
-        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-        ct, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
-        payload = nonce + ct + tag
-        return _CIPHERTEXT_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii")
-    except Exception as e:
-        logger.exception("encrypt_text failed; storing plaintext as fallback: %s", e)
-        return plaintext
+    nonce = get_random_bytes(12)
+    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+    ct, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
+    payload = nonce + ct + tag
+    return _CIPHERTEXT_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii")
+
+
+def is_encrypted(value: str) -> bool:
+    return isinstance(value, str) and value.startswith(_CIPHERTEXT_PREFIX)
 
 
 def decrypt_text(value: str) -> str:

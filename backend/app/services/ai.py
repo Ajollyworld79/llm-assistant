@@ -1,6 +1,7 @@
 import json
 import logging
 import asyncio
+import contextvars
 from typing import Optional, Tuple, Any, List, Dict
 
 try:
@@ -36,6 +37,20 @@ except ImportError:
         logger = logging.getLogger(__name__)
 
 
+
+def _empty_usage() -> Dict[str, Any]:
+    return {"model": None, "prompt_tokens": 0, "completion_tokens": 0,
+            "cached_tokens": 0, "fallback": False}
+
+
+# Per-request usage (ContextVar so concurrent /search calls never share state).
+_LAST_USAGE: contextvars.ContextVar = contextvars.ContextVar("llm_last_usage", default=None)
+
+
+def get_last_usage() -> Dict[str, Any]:
+    """Usage of the most recent ask_agent_with_context call in this request context."""
+    return dict(_LAST_USAGE.get() or _empty_usage())
+
 class AIManager:
     """Chat completions backed by the free Gemini API (google-genai)."""
 
@@ -43,9 +58,7 @@ class AIManager:
         self.settings = settings_obj
         self.embeddings = embeddings_module
         self._client = client
-        self.last_used_model: Optional[str] = None
-        self.last_total_tokens: int = 0
-        self.last_cached_tokens: int = 0  # Gemini does not expose this; kept for metric compatibility
+
         self.fallback_invocation_count: int = 0
         # Pydantic class — google-genai converts to Gemini's schema format internally.
         self._response_schema = ChatAnswer
@@ -117,17 +130,24 @@ class AIManager:
         )
 
     def _record_usage(self, response, model_used: str) -> None:
-        self.last_used_model = model_used
+        is_fallback = bool(model_used) and (model_used == (getattr(self.settings, "gemini_model_fallback", "") or ""))
+        usage_state = {
+            "model": model_used, "prompt_tokens": 0, "completion_tokens": 0,
+            "cached_tokens": 0, "fallback": is_fallback,
+        }
+        _LAST_USAGE.set(usage_state)
         try:
             usage = getattr(response, "usage_metadata", None)
             if usage is None:
-                logger.warning("_record_usage: response.usage_metadata is None for model=%s — no usage_event will be logged", model_used)
+                logger.warning("_record_usage: response.usage_metadata is None for model=%s", model_used)
                 return
             prompt_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
             completion_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
-            self.last_total_tokens = int(getattr(usage, "total_token_count", prompt_tokens + completion_tokens) or 0)
-            self.last_cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
-            logger.info("_record_usage: model=%s tokens_in=%d tokens_out=%d cached=%d", model_used, prompt_tokens, completion_tokens, self.last_cached_tokens)
+            total_tokens = int(getattr(usage, "total_token_count", prompt_tokens + completion_tokens) or 0)
+            cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
+            usage_state.update(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                               cached_tokens=cached_tokens)
+            logger.info("_record_usage: model=%s tokens_in=%d tokens_out=%d cached=%d", model_used, prompt_tokens, completion_tokens, cached_tokens)
         except Exception as e:
             logger.warning("_record_usage: failed to extract usage_metadata: %s", e, exc_info=True)
             return
@@ -137,7 +157,7 @@ class AIManager:
                 from backend.app.module.rate_limiter import get_limiter
             except ImportError:
                 from module.rate_limiter import get_limiter
-            asyncio.create_task(get_limiter().record_tokens(self.last_total_tokens))
+            asyncio.create_task(get_limiter().record_tokens(total_tokens))
         except Exception as e:
             logger.debug("Failed to record tokens to limiter: %s", e)
 
@@ -146,33 +166,15 @@ class AIManager:
                 from backend.app.module.apimonitor import monitor as _mon
             except ImportError:
                 from module.apimonitor import monitor as _mon
-            _mon.record_cache_stats(prompt_tokens, self.last_cached_tokens)
+            _mon.record_cache_stats(prompt_tokens, cached_tokens)
         except Exception as e:
             logger.debug("Failed to record cache stats: %s", e)
-
-        try:
-            try:
-                from backend.app.module.usage_db import usage_db
-            except ImportError:
-                from module.usage_db import usage_db
-            is_fallback = (model_used == getattr(self.settings, "gemini_model_fallback", ""))
-            usage_db.log_event(
-                session_id=None,
-                endpoint="/search",
-                model=model_used,
-                tokens_input=prompt_tokens,
-                tokens_output=completion_tokens,
-                tokens_cached=self.last_cached_tokens,
-                latency_ms=0,
-                status_code=200,
-                error_kind="fallback" if is_fallback else None,
-            )
-        except Exception as e:
-            logger.warning("Failed to log usage event: %s", e, exc_info=True)
 
     async def ask_agent_with_context(self, query: str, context: str,
                                      conversation_history: Optional[list] = None,
                                      images: Optional[List[Dict[str, str]]] = None) -> Tuple[str, Optional[int]]:
+        _LAST_USAGE.set(_empty_usage())
+
         if conversation_history is None:
             conversation_history = []
 

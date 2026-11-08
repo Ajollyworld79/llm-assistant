@@ -459,7 +459,7 @@ class QdrantService:
         except Exception as e:
             self.set_loading_state(False)
             logger.error(f"clear_collection error: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "failed"}
 
     async def optimize_collection(self) -> dict:
         """Trigger collection optimization (best-effort)."""
@@ -473,10 +473,10 @@ class QdrantService:
                 return {"success": True, "message": "Optimization triggered"}
             except Exception as e:
                 logger.warning(f"optimize_collection failed: {e}")
-                return {"success": False, "error": str(e)}
+                return {"success": False, "error": "failed"}
         except Exception as e:
             logger.error(f"optimize_collection error: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "failed"}
 
 
 class QdrantAdapter:

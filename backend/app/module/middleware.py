@@ -365,15 +365,13 @@ def setup_middleware(app):
         if isinstance(e, HTTPException):
             return e
 
-        # Log unexpected errors
-        logger.error(f"Unhandled exception: {str(e)}")
-        logger.debug(traceback.format_exc())
+        request_id = getattr(g, 'request_id', None)
+        logger.error("Unhandled exception (request_id=%s): %s", request_id, e, exc_info=True)
 
-        return jsonify({
-            "error": "Internal Server Error",
-            "details": str(e),
-            "type": type(e).__name__,
-        }), 500
+        body = {"error": "internal_error"}
+        if request_id:
+            body["request_id"] = request_id
+        return jsonify(body), 500
 
     @app.errorhandler(404)
     async def not_found(e):

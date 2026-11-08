@@ -31,6 +31,8 @@ class RateLimiter:
         self._ip_day: dict[str, deque] = defaultdict(deque)
         self._session_count: dict[str, int] = defaultdict(int)
 
+        self._last_prune = 0.0
+        self._sessions_date = self._today()
         self._lock = asyncio.Lock()
         self._budget_state = self._load_budget()
 
@@ -64,11 +66,36 @@ class RateLimiter:
             self._budget_state = {'date': self._today(), 'tokens_used': 0}
             self._save_budget()
 
+    def _prune_ips(self, now: float) -> None:
+        """Drop IPs whose windows are empty/expired (called under the lock)."""
+        day_ago = now - 86400
+        minute_ago = now - 60
+        for ip in list(self._ip_day.keys()):
+            dq = self._ip_day[ip]
+            while dq and dq[0] < day_ago:
+                dq.popleft()
+            if not dq:
+                del self._ip_day[ip]
+                self._ip_minute.pop(ip, None)
+                continue
+            mq = self._ip_minute.get(ip)
+            if mq is not None:
+                while mq and mq[0] < minute_ago:
+                    mq.popleft()
+                if not mq:
+                    del self._ip_minute[ip]
+
     async def check_ip(self, ip: str) -> Optional[str]:
         async with self._lock:
             now = time.time()
             minute_ago = now - 60
             day_ago = now - 86400
+
+            # Periodic sweep so one-off IPs don't accumulate forever.
+            if now - self._last_prune >= 60:
+                self._last_prune = now
+                self._prune_ips(now)
+                self._rotate_sessions_if_new_day()
 
             mq = self._ip_minute[ip]
             while mq and mq[0] < minute_ago:
@@ -80,16 +107,26 @@ class RateLimiter:
             while dq and dq[0] < day_ago:
                 dq.popleft()
             if len(dq) >= self.per_day:
+                if not mq:
+                    del self._ip_minute[ip]
                 return f"per-IP daily limit ({self.per_day}/day)"
 
             mq.append(now)
             dq.append(now)
         return None
 
+    def _rotate_sessions_if_new_day(self) -> None:
+        """Session counters are per UTC day so the dict cannot grow without bound."""
+        today = self._today()
+        if self._sessions_date != today:
+            self._sessions_date = today
+            self._session_count.clear()
+
     async def check_session(self, session_id: Optional[str]) -> Optional[str]:
         if not session_id:
             return None
         async with self._lock:
+            self._rotate_sessions_if_new_day()
             if self._session_count[session_id] >= self.per_session:
                 return f"per-session message limit ({self.per_session})"
             self._session_count[session_id] += 1

@@ -11,5 +11,10 @@ dist/
 # frontend
 /frontend/node_modules/
 
-# Keep local_qdrant_db in Git for persistent storage
-# local_qdrant_db/ is now tracked
+# Local Qdrant data (production uses a Railway volume at /app/qdrant_data)
+local_qdrant_db/
+qdrant_data/
+
+# Local secrets and logs
+backend/.env
+backend/logs/

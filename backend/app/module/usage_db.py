@@ -185,55 +185,86 @@ class UsageDB:
         except Exception as e:
             logger.warning("chat_events insert failed: %s", e, exc_info=True)
 
-    async def list_chats(self, limit: int = 200) -> List[Dict[str, Any]]:
-        """Return chat events newest-first as JSON-serializable dicts."""
-        limit = max(1, min(int(limit or 200), 1000))
+    @staticmethod
+    def _chat_row(r: Dict[str, Any]) -> Dict[str, Any]:
+        ts = r.get("ts")
+        return {
+            "id": r.get("id"),
+            "ts": ts.isoformat() if isinstance(ts, datetime.datetime) else ts,
+            "thread_id": r.get("thread_id") or "",
+            "query": r.get("query") or "",
+            "answer": r.get("answer") or "",
+            "embed_ms": r.get("embed_ms") or 0,
+            "ai_ms": r.get("ai_ms") or 0,
+            "total_ms": r.get("total_ms") or 0,
+            "model": r.get("model") or "",
+            "tokens_input": r.get("tokens_input") or 0,
+            "tokens_output": r.get("tokens_output") or 0,
+            "doc_count": r.get("doc_count") or 0,
+        }
+
+    async def list_chats(self, limit: int = 50, before_id: Optional[int] = None,
+                         q: Optional[str] = None) -> Dict[str, Any]:
+        """Page of chat events newest-first: {items, total, next_before_id}.
+
+        `total` counts rows matching `q` (ignoring paging). `q` is a
+        case-insensitive substring over query/answer, or an exact thread_id.
+        Raises on Postgres failure so the API can report it.
+        """
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 200))
+        q = (q or "").strip() or None
+
         if self._pool is not None:
+            params: List[Any] = []
+            filt = ""
+            if q:
+                esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                params = [f"%{esc}%", q]
+                filt = " WHERE (query ILIKE $1 OR answer ILIKE $1 OR thread_id = $2)"
+            page_where = filt
+            page_params = list(params)
+            if before_id is not None:
+                page_params.append(int(before_id))
+                page_where += (" AND " if filt else " WHERE ") + f"id < ${len(page_params)}"
+            page_params.append(limit + 1)
             try:
                 async with self._pool.acquire() as conn:  # type: ignore
+                    total = int(await conn.fetchval(
+                        "SELECT count(*) FROM chat_events" + filt, *params))
                     rows = await conn.fetch(
-                        """SELECT id, ts, thread_id, query, answer, embed_ms, ai_ms,
-                                  total_ms, model, tokens_input, tokens_output, doc_count
-                           FROM chat_events
-                           ORDER BY id DESC
-                           LIMIT $1""",
-                        limit,
+                        "SELECT id, ts, thread_id, query, answer, embed_ms, ai_ms, "
+                        "total_ms, model, tokens_input, tokens_output, doc_count "
+                        "FROM chat_events" + page_where +
+                        f" ORDER BY id DESC LIMIT ${len(page_params)}",
+                        *page_params,
                     )
-                    return [{
-                        "id": r["id"],
-                        "ts": r["ts"].isoformat() if r["ts"] else None,
-                        "thread_id": r["thread_id"],
-                        "query": r["query"],
-                        "answer": r["answer"],
-                        "embed_ms": r["embed_ms"],
-                        "ai_ms": r["ai_ms"],
-                        "total_ms": r["total_ms"],
-                        "model": r["model"],
-                        "tokens_input": r["tokens_input"],
-                        "tokens_output": r["tokens_output"],
-                        "doc_count": r["doc_count"],
-                    } for r in rows]
-            except Exception as e:
-                logger.warning("chat_events list query failed: %s", e, exc_info=True)
-                return []
-        # Memory fallback — newest first
-        out = []
-        for r in list(self._mem_chats)[-limit:][::-1]:
-            out.append({
-                "id": r.get("id"),
-                "ts": r["ts"].isoformat() if isinstance(r.get("ts"), datetime.datetime) else r.get("ts"),
-                "thread_id": r.get("thread_id", ""),
-                "query": r.get("query", ""),
-                "answer": r.get("answer", ""),
-                "embed_ms": r.get("embed_ms", 0),
-                "ai_ms": r.get("ai_ms", 0),
-                "total_ms": r.get("total_ms", 0),
-                "model": r.get("model", ""),
-                "tokens_input": r.get("tokens_input", 0),
-                "tokens_output": r.get("tokens_output", 0),
-                "doc_count": r.get("doc_count", 0),
-            })
-        return out
+            except Exception:
+                logger.error("chat_events list query failed", exc_info=True)
+                raise
+            items = [self._chat_row(dict(r)) for r in rows]
+        else:
+            needle = q.lower() if q else None
+            matched = [
+                r for r in reversed(self._mem_chats)
+                if needle is None
+                or needle in (r.get("query") or "").lower()
+                or needle in (r.get("answer") or "").lower()
+                or (r.get("thread_id") or "") == q
+            ]
+            total = len(matched)
+            if before_id is not None:
+                matched = [r for r in matched if (r.get("id") or 0) < int(before_id)]
+            items = [self._chat_row(r) for r in matched[:limit + 1]]
+
+        next_before_id = None
+        if len(items) > limit:
+            items = items[:limit]
+            next_before_id = items[-1]["id"]
+        return {"items": items, "total": total, "next_before_id": next_before_id}
 
     async def delete_chat(self, chat_id: int) -> bool:
         if self._pool is not None:

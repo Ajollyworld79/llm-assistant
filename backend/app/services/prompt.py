@@ -1,6 +1,6 @@
 """System prompt + structured-output schema for the IT support agent.
 
-Designed for Gemini Flash (gemini-2.5-flash primary, gemini-2.5-flash-lite
+Designed for Gemini Flash (gemini-3.6-flash primary, gemini-3.5-flash-lite
 fallback). The model returns a JSON object matching CHAT_ANSWER_SCHEMA via
 `response_mime_type='application/json' + response_schema=...`.
 

@@ -11,8 +11,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <script defer src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js" integrity="sha384-YTBHtsL8yVTHcLakYNyrOfK3K+QQcXiECuaALJ+3j7Mo681Rtzadt8NR6WrZH+eQ" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
 </head>
 <body>
     <button class="menu-toggle" aria-label="Open menu" onclick="toggleSidebar()">
@@ -455,6 +455,31 @@
             }
         }
 
+        function buildResultCard(r, allResults) {
+            const filename = String(r.filename == null ? '' : r.filename);
+            const score = Number(r.score) || 0;
+            const card = document.createElement('div');
+            card.className = 'result-card';
+            card.dataset.filename = filename;
+            card.addEventListener('click', () => viewDocument(card.dataset.filename, allResults));
+
+            const header = document.createElement('div');
+            header.className = 'result-header';
+            const name = document.createElement('span');
+            name.textContent = filename;
+            const badge = document.createElement('span');
+            badge.className = 'score-badge ' + (score > 0.8 ? 'match-high' : (score > 0.6 ? 'match-med' : ''));
+            badge.textContent = (score * 100).toFixed(0) + '%';
+            header.append(name, badge);
+
+            const text = document.createElement('div');
+            text.className = 'result-text';
+            text.textContent = r.chunk_text == null ? '' : String(r.chunk_text);
+
+            card.append(header, text);
+            return card;
+        }
+
         function addMessage(type, text, results = null, meta = null) {
             // Hide welcome hero on first interaction
             const hero = document.getElementById('welcome-hero');
@@ -467,18 +492,7 @@
             let contentHtml = `<div class="msg-bubble">${renderBubbleContent(type, text)}</div>`;
 
             if (results && results.length > 0) {
-                const cardsHtml = results.map(r => {
-                    const scoreClass = r.score > 0.8 ? 'match-high' : (r.score > 0.6 ? 'match-med' : '');
-                    return `
-                    <div class="result-card" onclick="viewDocument('${escapeHtml(r.filename)}')">
-                        <div class="result-header">
-                            <span>${escapeHtml(r.filename)}</span>
-                            <span class="score-badge ${scoreClass}">${(r.score * 100).toFixed(0)}%</span>
-                        </div>
-                        <div class="result-text">${escapeHtml(r.chunk_text)}</div>
-                    </div>`;
-                }).join('');
-                contentHtml += `<div class="results-grid">${cardsHtml}</div>`;
+                contentHtml += `<div class="results-grid"></div>`;
             }
 
             if (type === 'bot' && meta && meta.total_ms != null) {
@@ -505,6 +519,11 @@
                 </div>
             `;
 
+            const grid = msgDiv.querySelector('.results-grid');
+            if (grid && results) {
+                results.forEach(r => grid.appendChild(buildResultCard(r, results)));
+            }
+
             history.appendChild(msgDiv);
             history.scrollTop = history.scrollHeight;
         }
@@ -517,7 +536,12 @@
 
         function escapeHtml(text) {
             if (!text) return '';
-            return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            return String(text)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
         }
 
         function showToast(message, success = true, duration = 4000) {
@@ -538,26 +562,16 @@
             }, duration);
         }
 
-        async function viewDocument(filename) {
-            try {
-                openModal("Loading...", "Fetching document...");
-                let res = await fetch(BASE + `/document/${filename}`);
-                if (!res.ok) {
-                    const listRes = await fetch(BASE + '/documents');
-                    const list = await listRes.json();
-                    const found = list.find(d => d.filename === filename);
-                    if (found) {
-                        res = await fetch(BASE + `/document/${found.id}`);
-                    }
-                }
-
-                if (!res.ok) throw new Error("Document not found");
-
-                const data = await res.json();
-                openModal(data.filename, data.text);
-            } catch (e) {
-                openModal("Error", "Could not load document content. " + e.message);
-            }
+        async function viewDocument(filename, results) {
+            // The full-document endpoint is operator-only; the public view shows the
+            // excerpts retrieved for this answer.
+            const excerpts = (results || [])
+                .filter(r => r.filename === filename)
+                .map(r => r.chunk_text || '');
+            const body = excerpts.length
+                ? excerpts.join('\n\n---\n\n')
+                : 'No excerpts available for this source.';
+            openModal(filename, body + '\n\n— Showing retrieved excerpts only. The full document is available to operators.');
         }
 
         function openModal(title, text) {

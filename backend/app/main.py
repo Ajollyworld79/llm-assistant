@@ -10,7 +10,7 @@
 - Search using cosine similarity
 - RAG chat backed by the free Gemini API
 """
-from quart import Quart, request, jsonify, render_template, g
+from quart import Quart, request, jsonify, render_template, g, make_response
 from quart_cors import cors
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, cast
@@ -22,6 +22,8 @@ import logging
 import datetime
 import inspect
 from functools import wraps
+import os
+import re
 
 try:
     from .config import settings
@@ -29,6 +31,7 @@ try:
     from .module.lifecycle import lifecycle
     from .module.apimonitor import monitor
     from .module.crypto import encrypt_text, decrypt_text
+    from .module.auth import is_admin_request, is_search_request, has_valid_session, issue_session_cookie, SESSION_COOKIE, SESSION_MAX_AGE
     from .module.demo_lock import reject_if_locked, is_locked as demo_is_locked
     from .module.usage_db import usage_db
     try:
@@ -42,7 +45,7 @@ except ImportError:
     # used by sibling routes. Mixing the two creates duplicate singletons —
     # avoid hitting this branch in production by running under uvicorn with
     # ``backend.app.main:app`` so the try branch above succeeds.
-    import os, sys
+    import sys
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     if APP_DIR not in sys.path:
         sys.path.insert(0, APP_DIR)
@@ -52,6 +55,7 @@ except ImportError:
     from module.lifecycle import lifecycle
     from module.apimonitor import monitor
     from module.crypto import encrypt_text, decrypt_text
+    from module.auth import is_admin_request, is_search_request, has_valid_session, issue_session_cookie, SESSION_COOKIE, SESSION_MAX_AGE
     from module.demo_lock import reject_if_locked, is_locked as demo_is_locked
     from module.usage_db import usage_db
     try:
@@ -62,14 +66,14 @@ except ImportError:
 # Import refactored services
 try:
     from .services.parser import parse_content, parser_service
-    from .services.ai import AIManager, DemoLLM
+    from .services.ai import AIManager, DemoLLM, get_last_usage
     from .services.vector_store import (
         QdrantService, QdrantAdapter, embedding_adapter, embedding_service, DOCUMENTS
     )
 except ImportError as e:
     try:
         from services.parser import parse_content, parser_service
-        from services.ai import AIManager, DemoLLM
+        from services.ai import AIManager, DemoLLM, get_last_usage
         from services.vector_store import (
             QdrantService, QdrantAdapter, embedding_adapter, embedding_service, DOCUMENTS
         )
@@ -89,7 +93,9 @@ except ImportError:
 
 
 app = Quart(__name__, template_folder='../templates', static_folder='../static')
-app = cors(app, allow_origin="*")
+_cors_origins = [o.strip() for o in os.environ.get('CORS_ALLOW_ORIGINS', '').split(',') if o.strip()]
+if _cors_origins:
+    app = cors(app, allow_origin=_cors_origins)
 
 # Register Middleware
 setup_middleware(app)
@@ -143,64 +149,51 @@ class AuthManager:
         self.settings = settings
 
     def require_admin(self, f):
+        """Fail-closed: 401 unless ADMIN_TOKEN is configured and the Bearer matches."""
         @wraps(f)
         async def decorated_function(*args, **kwargs):
-            token_expected = getattr(self.settings, 'admin_token', None)
-            if not token_expected:
-                return jsonify({'error': 'unauthorized', 'detail': 'Admin token not configured'}), 401
-            auth = request.headers.get('Authorization', '')
-            if not auth.startswith('Bearer '):
-                return jsonify({'error': 'unauthorized'}), 401
-            token = auth.split(' ', 1)[1].strip()
-            if token != token_expected:
+            if not is_admin_request():
                 return jsonify({'error': 'unauthorized'}), 401
             return await f(*args, **kwargs)
 
         return decorated_function
 
     def require_search_token(self, f):
-        """Gate /search smartly: same-origin browser requests pass freely, while
-        external API consumers must present a Bearer token (SEARCH_API_TOKEN or
-        ADMIN_TOKEN).
-
-        - If SEARCH_API_TOKEN is not configured: endpoint stays fully open.
-        - If configured: requests from our own web UI (detected via
-          Sec-Fetch-Site=same-origin/same-site or matching Origin/Referer host)
-          are allowed without a token. Everything else must carry a valid Bearer.
-
-        Note: Origin/Sec-Fetch headers can be spoofed by determined attackers —
-        this is a usability heuristic, not strict security. Use rate limiting
-        (already installed) for actual abuse protection.
-        """
+        """Gate /search: Bearer SEARCH_API_TOKEN/ADMIN_TOKEN (API consumers) or the
+        signed session cookie issued by GET / (the app's own chat page). Anything
+        else gets 401. Headers such as Origin/Sec-Fetch-Site are never trusted."""
         @wraps(f)
         async def decorated_function(*args, **kwargs):
-            search_token = getattr(self.settings, 'search_api_token', None)
-            if not search_token:
-                # Not configured — endpoint stays open.
+            if is_search_request() or has_valid_session():
                 return await f(*args, **kwargs)
-
-            # Browser same-origin heuristic
-            sec_fetch_site = request.headers.get('Sec-Fetch-Site', '')
-            host = request.headers.get('Host', '')
-            origin = request.headers.get('Origin', '') or request.headers.get('Referer', '')
-            is_browser_same_origin = (
-                sec_fetch_site in ('same-origin', 'same-site')
-                or (host and origin and host in origin)
-            )
-            if is_browser_same_origin:
-                return await f(*args, **kwargs)
-
-            # External request — Bearer required
-            auth = request.headers.get('Authorization', '')
-            if not auth.startswith('Bearer '):
-                return jsonify({'error': 'unauthorized', 'message': 'External calls require Authorization: Bearer <token>'}), 401
-            token = auth.split(' ', 1)[1].strip()
-            admin_token = getattr(self.settings, 'admin_token', None) or ''
-            if token != search_token and token != admin_token:
-                return jsonify({'error': 'unauthorized'}), 401
-            return await f(*args, **kwargs)
+            return jsonify({'error': 'unauthorized'}), 401
 
         return decorated_function
+
+
+def _public_stats(stats):
+    """Strip exception messages from monitor stats unless the caller is an operator."""
+    if not isinstance(stats, dict) or is_admin_request():
+        return stats
+    public = dict(stats)
+    errors = public.pop('recent_errors', None)
+    public['recent_errors_count'] = len(errors) if errors is not None else 0
+    return public
+
+
+_FILENAME_STRIP_RE = re.compile(r'[\x00-\x1f\x7f"\'<>&`]')
+
+
+def sanitize_filename(name) -> str:
+    """Make a client-supplied filename safe to store and render."""
+    if isinstance(name, str):
+        name = name.replace('\\', '/').rsplit('/', 1)[-1]
+        name = _FILENAME_STRIP_RE.sub('', name)
+        name = ' '.join(name.split())
+        name = name[:120].strip()
+        if name and name.strip('.'):
+            return name
+    return f"upload-{int(time.time())}"
 
 # Instantiate helpers
 auth_manager = AuthManager(settings)
@@ -242,13 +235,13 @@ async def health():
         try:
             if hasattr(monitor, 'get_health_summary'):
                 monitor_summary = monitor.get_health_summary()
-                basic_health['metrics'] = monitor_summary.get('metrics')
+                basic_health['metrics'] = _public_stats(monitor_summary.get('metrics'))
                 basic_health['monitor'] = {
                     'status': monitor_summary.get('status'),
                     'issues': monitor_summary.get('issues', []),
                 }
             else:
-                basic_health['metrics'] = monitor.get_stats()
+                basic_health['metrics'] = _public_stats(monitor.get_stats())
         except Exception as e:
             logger.warning(f"Failed to get api monitor health: {e}")
 
@@ -272,7 +265,8 @@ async def health():
                     pass
             basic_health["components"]["qdrant"] = qdrant_info
         except Exception as e:
-            basic_health["components"]["qdrant"] = {"status": "error", "error": str(e)}
+            logger.warning("Qdrant health check failed: %s", e)
+            basic_health["components"]["qdrant"] = {"status": "error"}
 
         # Gemini availability (best-effort). In demo mode the simulated LLM is
         # the expected engine, so a missing key is not a failure there.
@@ -285,12 +279,13 @@ async def health():
                 gemini_status = "unavailable"
             basic_health["components"]["gemini"] = {"status": gemini_status}
         except Exception as e:
-            basic_health["components"]["gemini"] = {"status": "error", "error": str(e)}
+            logger.warning("Gemini status check failed: %s", e)
+            basic_health["components"]["gemini"] = {"status": "error"}
 
         try:
             basic_health["components"]["database"] = {"status": "not_configured"}
         except Exception as e:
-            basic_health["components"]["database"] = {"status": "error", "error": str(e)}
+            basic_health["components"]["database"] = {"status": "error"}
 
         # Determine overall status: degrade only on real failures, not on
         # designed fallback modes (in-memory store, demo LLM) or soft monitor
@@ -327,7 +322,7 @@ async def health():
 
     except Exception as e:
         logger.exception('Health check error: %s', e)
-        return jsonify({"status": "error", "error": str(e)}), 500
+        return jsonify({"status": "error"}), 500
 
 
 @app.route('/health/gc')
@@ -340,7 +335,7 @@ async def health_gc():
         return jsonify({"status": "ok", "gc": stats})
     except Exception as e:
         logger.exception('Failed to get GC stats: %s', e)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal_error"}), 500
 
 
 @app.route('/health/middleware')
@@ -354,7 +349,7 @@ async def health_middleware():
         return jsonify({"status": "ok", "middleware": stats})
     except Exception as e:
         logger.exception('Failed to get middleware stats: %s', e)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal_error"}), 500
 
 
 @app.route('/')
@@ -363,22 +358,39 @@ async def index():
     welcome_prompt = get_welcome_prompt()
     demo_mode = bool(getattr(settings, 'demo', False))
     locked = bool(demo_is_locked())
-    return await render_template('index.html', welcome_prompt=welcome_prompt, demo_mode=demo_mode, locked=locked)
+    response = await make_response(
+        await render_template('index.html', welcome_prompt=welcome_prompt, demo_mode=demo_mode, locked=locked)
+    )
+    try:
+        secure = request.scheme == 'https' or request.headers.get('X-Forwarded-Proto', '').split(',')[0].strip().lower() == 'https'
+        response.set_cookie(
+            SESSION_COOKIE,
+            issue_session_cookie(),
+            max_age=SESSION_MAX_AGE,
+            httponly=True,
+            secure=secure,
+            samesite='Strict',
+            path='/',
+        )
+    except RuntimeError:
+        logger.error("Chat session cookie not issued: neither SEARCH_API_TOKEN nor ADMIN_TOKEN is configured")
+    return response
 
 
 @app.route('/monitor')
 async def monitor_stats():
-    """API monitoring statistics endpoint"""
+    """API monitoring statistics endpoint (error messages are operator-only)."""
     try:
         stats = await monitor.get_stats_async()
-        return jsonify(stats)
+        return jsonify(_public_stats(stats))
     except Exception as e:
-        logger.exception(f"Failed to get monitor stats: {e}")
-        return jsonify({"error": "Failed to get stats", "details": str(e)}), 500
+        logger.exception("Failed to get monitor stats: %s", e)
+        return jsonify({"error": "Failed to get stats"}), 500
 
 
 @app.route('/upload', methods=['POST'])
 @reject_if_locked
+@auth_manager.require_admin
 async def upload_file():
     request_id = monitor.start_request('/upload', 'POST')
     # Accept either multipart file uploads or JSON with 'text' and optional 'filename'
@@ -386,12 +398,12 @@ async def upload_file():
     if 'file' in form:
         file = form['file']
         content = await asyncio.to_thread(file.read)
-        filename = file.filename or f"upload-{int(time.time())}"
+        filename = sanitize_filename(file.filename)
         text = await parse_content(filename, content)
     else:
         payload = await request.get_json(silent=True)
-        if payload and 'text' in payload:
-            filename = payload.get('filename', f"upload-{int(time.time())}")
+        if isinstance(payload, dict) and 'text' in payload and isinstance(payload['text'], str):
+            filename = sanitize_filename(payload.get('filename'))
             text = payload['text']
         else:
             monitor.end_request(request_id, success=False, error="file field or JSON text required")
@@ -401,16 +413,6 @@ async def upload_file():
     chunks = await embedding_service.chunk_text_async(text)
     doc_id = str(uuid.uuid4())
 
-    # Admin auth (if configured)
-    if settings.admin_token:
-        auth = request.headers.get('Authorization', '')
-        if not auth.startswith('Bearer '):
-            monitor.end_request(request_id, success=False, error="unauthorized")
-            return jsonify({'error': 'unauthorized'}), 401
-        token = auth.split(' ', 1)[1].strip()
-        if token != settings.admin_token:
-            monitor.end_request(request_id, success=False, error="unauthorized")
-            return jsonify({'error': 'unauthorized'}), 401
 
     # Store in Qdrant if available, otherwise in-memory
     if not lifecycle.qdrant_client:
@@ -497,11 +499,11 @@ async def upload_file():
         except ValueError as e:
             # Likely a numpy broadcast / dim mismatch error from local Qdrant implementation
             logger.exception('Failed to upsert vectors (likely dim mismatch): %s', e)
-            
-            detail_msg = str(e)
+
+            detail_msg = "Embedding vector size is incompatible with the collection."
             if coll_dim is not None:
-                detail_msg = f"Collection vector size is {coll_dim}; attempted upsert vector had incompatible shape. Error: {str(e)}"
-            monitor.end_request(request_id, success=False, error=detail_msg)
+                detail_msg = f"Collection vector size is {coll_dim}; attempted upsert vector had incompatible shape."
+            monitor.end_request(request_id, success=False, error="embedding_dim_mismatch")
             return jsonify({"error": "embedding_dim_mismatch", "details": detail_msg,
                             "hint": "Recreate or create a collection with EMBEDDING_DIM=3072 using /admin/collection then reindex."}), 409
         except Exception as e:
@@ -521,8 +523,8 @@ async def upload_file():
         })
     except Exception as e:
         logger.exception('Failed to upsert vectors: %s', e)
-        monitor.end_request(request_id, success=False, error=str(e))
-        return jsonify({"error": "Failed to index document", "details": str(e)}), 500
+        monitor.end_request(request_id, success=False, error="index_failed")
+        return jsonify({"error": "Failed to index document"}), 500
 
 
 @app.route('/admin/collection', methods=['POST'])
@@ -650,7 +652,7 @@ async def admin_upload_vectors():
     for doc in docs:
         try:
             doc_id = doc.get('id') or str(uuid.uuid4())
-            filename = doc.get('filename') or f"upload-{int(time.time())}"
+            filename = sanitize_filename(doc.get('filename'))
             chunks = doc.get('chunks') or []
             # Basic validation
             if not isinstance(chunks, list) or not chunks:
@@ -690,6 +692,7 @@ async def admin_upload_vectors():
 
 
 @app.route('/documents')
+@auth_manager.require_admin
 async def list_documents():
     if not lifecycle.qdrant_client:
         return jsonify([{
@@ -708,6 +711,7 @@ async def list_documents():
 
 
 @app.route('/document/<doc_id>')
+@auth_manager.require_admin
 async def get_document(doc_id):
     if not lifecycle.qdrant_client:
         doc = next((d for d in DOCUMENTS if d["id"] == doc_id), None)
@@ -729,13 +733,26 @@ async def get_document(doc_id):
 @auth_manager.require_search_token
 async def search():
     request_id = monitor.start_request('/search', 'POST')
-    payload = await request.get_json()
-    if not payload or 'query' not in payload:
+    payload = await request.get_json(silent=True)
+    if not isinstance(payload, dict) or 'query' not in payload:
         monitor.end_request(request_id, success=False, error="query required")
         return jsonify({"error": "query required"}), 400
     
-    query = payload.get('query', '').strip()
-    top_k = int(payload.get('top_k', 5))
+    query = payload.get('query', '')
+    if not isinstance(query, str):
+        monitor.end_request(request_id, success=False, error="query must be a string")
+        return jsonify({"error": "query must be a string"}), 400
+    query = query.strip()
+    max_top_k = max(1, int(getattr(settings, 'MAX_SEARCH_LIMIT', 10) or 10))
+    try:
+        top_k_raw = payload.get('top_k', 5)
+        if isinstance(top_k_raw, bool):
+            raise ValueError("top_k must be an integer")
+        top_k = int(top_k_raw)
+    except (TypeError, ValueError):
+        monitor.end_request(request_id, success=False, error="invalid top_k")
+        return jsonify({"error": "invalid top_k"}), 400
+    top_k = max(1, min(top_k, max_top_k))
     simulate_latency = payload.get('simulate_latency', True)
     filters = payload.get('filters', None) # Extract filters
     images = payload.get('images', None)  # Optional [{data_base64, mime_type}, ...] for multimodal Gemini
@@ -799,8 +816,7 @@ async def search():
                 res = await asyncio.to_thread(client.query_points, collection_name=settings.qdrant_collection, query=q_emb, query_filter=query_filter, limit=top_k)
                 search_res = getattr(res, 'results', res)
             
-            logger.info(f"DEBUG: search_res type: {type(search_res)}, content: {search_res}")
-            
+
             # Handle QueryResponse object from newer Qdrant clients
             if hasattr(search_res, 'points'):
                 search_res = search_res.points
@@ -818,7 +834,7 @@ async def search():
                     'score': float(score),
                 })
         except Exception as e:
-            logger.error(f"Search failed: {e}")
+            logger.error("Search failed: %s", e, exc_info=True)
             
         top = results # already limited by Qdrant
         unique_files = set(r['filename'] for r in top)
@@ -866,19 +882,21 @@ async def search():
                     answer = "Content blocked by safety filters."
                 else:
                     answer = cleaned
-        except Exception as e:
+        except Exception:
             logger.exception("RAG Generation failed")
-            answer = f"Error generating answer: {str(e)}"
+            answer = "Sorry, the answer could not be generated right now. Please try again."
 
     monitor.end_request(request_id, success=True)
 
     total_ms = int((time.perf_counter() - t_request_start) * 1000)
-    # Pull token counts from the AI manager's last call (if Gemini was used)
-    last_model = getattr(chat_agent.ai_manager, 'last_used_model', None) or (
-        getattr(settings, 'gemini_model', None) or ('demo' if settings.demo else '')
-    )
-    last_tokens_total = int(getattr(chat_agent.ai_manager, 'last_total_tokens', 0) or 0)
-    last_cached = int(getattr(chat_agent.ai_manager, 'last_cached_tokens', 0) or 0)
+    if settings.demo:
+        usage = {"model": "demo", "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "fallback": False}
+    else:
+        usage = get_last_usage()
+    last_model = usage.get("model") or getattr(settings, 'gemini_model', None) or ''
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    cached_tokens = int(usage.get("cached_tokens") or 0)
 
     try:
         usage_db.log_chat(
@@ -889,26 +907,25 @@ async def search():
             ai_ms=ai_ms_total,
             total_ms=total_ms,
             model=last_model,
-            tokens_input=last_tokens_total,
-            tokens_output=0,
+            tokens_input=prompt_tokens,
+            tokens_output=completion_tokens,
             doc_count=len(top) if 'top' in locals() else 0,
         )
     except Exception as e:
         logger.warning("usage_db.log_chat failed: %s", e, exc_info=True)
 
-    # Also log a usage_event independently so the Usage History tab fills even
-    # if ai.py's _record_usage path misses (e.g., no usage_metadata on fallback).
+    # Exactly one usage_event per /search request.
     try:
         usage_db.log_event(
             session_id=None,
             endpoint="/search",
             model=last_model,
-            tokens_input=last_tokens_total,
-            tokens_output=0,
-            tokens_cached=last_cached,
+            tokens_input=prompt_tokens,
+            tokens_output=completion_tokens,
+            tokens_cached=cached_tokens,
             latency_ms=total_ms,
             status_code=200,
-            error_kind=None,
+            error_kind="fallback" if usage.get("fallback") else None,
         )
     except Exception as e:
         logger.warning("usage_db.log_event from /search failed: %s", e, exc_info=True)
@@ -925,26 +942,20 @@ async def search():
         "embed_ms": embed_ms_total,
         "ai_ms": ai_ms_total,
         "total_ms": total_ms,
+        "model": last_model,
     })
 
 
 @app.route('/optimize', methods=['POST'])
 @reject_if_locked
+@auth_manager.require_admin
 async def optimize_store():
     """Optimize Qdrant collection.
 
-    Requires admin token when configured. Triggers collection optimization in Qdrant
+    Requires the admin token. Triggers collection optimization in Qdrant
     unless running in demo mode or Qdrant client is unavailable. Returns JSON with
     operation result or error details.
     """
-    # Admin auth required
-    if settings.admin_token:
-        auth = request.headers.get('Authorization', '')
-        if not auth.startswith('Bearer '):
-            return jsonify({'error': 'unauthorized'}), 401
-        token = auth.split(' ', 1)[1].strip()
-        if token != settings.admin_token:
-            return jsonify({'error': 'unauthorized'}), 401
 
     if lifecycle.qdrant_client and not settings.demo:
         try:
@@ -959,21 +970,14 @@ async def optimize_store():
 
 @app.route('/reset', methods=['POST'])
 @reject_if_locked
+@auth_manager.require_admin
 async def reset_store():
     """Reset in-memory documents and clear Qdrant collection.
 
-    Requires admin token when configured. Clears the in-memory `DOCUMENTS` list and,
+    Requires the admin token. Clears the in-memory `DOCUMENTS` list and,
     if a Qdrant client is connected and not in demo mode, attempts to clear the configured
     collection and returns deletion details.
     """
-    # Admin auth required
-    if settings.admin_token:
-        auth = request.headers.get('Authorization', '')
-        if not auth.startswith('Bearer '):
-            return jsonify({'error': 'unauthorized'}), 401
-        token = auth.split(' ', 1)[1].strip()
-        if token != settings.admin_token:
-            return jsonify({'error': 'unauthorized'}), 401
 
     DOCUMENTS.clear()
     if lifecycle.qdrant_client and not settings.demo:
@@ -993,15 +997,8 @@ async def reset_store():
 
 @app.route('/document/<doc_id>', methods=['DELETE'])
 @reject_if_locked
+@auth_manager.require_admin
 async def delete_document(doc_id):
-    # Admin auth required
-    if settings.admin_token:
-        auth = request.headers.get('Authorization', '')
-        if not auth.startswith('Bearer '):
-            return jsonify({'error': 'unauthorized'}), 401
-        token = auth.split(' ', 1)[1].strip()
-        if token != settings.admin_token:
-            return jsonify({'error': 'unauthorized'}), 401
 
     if not lifecycle.qdrant_client:
         # Remove from DOCUMENTS (global fallback)

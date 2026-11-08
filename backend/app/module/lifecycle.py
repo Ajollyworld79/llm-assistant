@@ -59,6 +59,8 @@ class LifeCycleManager:
         logger.info("Starting up application resources...")
         # Run Qdrant connection in a separate thread to avoid blocking startup
         await asyncio.to_thread(self._connect_qdrant)
+        await asyncio.to_thread(self._check_payload_encryption)
+
         await embeddings.preload_embedding_models()
 
         # Start periodic GC cleanup task if gc_manager available
@@ -97,6 +99,51 @@ class LifeCycleManager:
             await usage_db.initialize()
         except Exception as e:
             logger.warning(f'Failed to initialize UsageDB: {e}')
+
+    def _check_payload_encryption(self) -> None:
+        """Warn when DEMO=false without a valid key; otherwise encrypt legacy plaintext payloads."""
+        try:
+            try:
+                from . import crypto
+            except ImportError:
+                from module import crypto  # type: ignore
+        except Exception as e:
+            logger.error('Payload encryption module unavailable: %s', e)
+            return
+
+        if not crypto.is_enabled():
+            if not getattr(settings, 'demo', False):
+                logger.error('PAYLOAD_ENCRYPTION_KEY is missing or invalid while DEMO=false: '
+                             'document chunks are stored UNENCRYPTED in Qdrant')
+            return
+
+        client = self._qdrant_client
+        if client is None:
+            return
+        collection = settings.qdrant_collection
+        migrated = 0
+        try:
+            offset = None
+            while True:
+                points, offset = client.scroll(
+                    collection_name=collection, limit=256, offset=offset,
+                    with_payload=True, with_vectors=False,
+                )
+                for p in points:
+                    text = (p.payload or {}).get('text')
+                    if isinstance(text, str) and text and not crypto.is_encrypted(text):
+                        client.set_payload(
+                            collection_name=collection,
+                            payload={'text': crypto.encrypt_text(text)},
+                            points=[p.id],
+                        )
+                        migrated += 1
+                if offset is None:
+                    break
+        except Exception as e:
+            logger.error('Legacy payload encryption migration failed after %d points: %s', migrated, e, exc_info=True)
+            return
+        logger.info('Payload encryption migration: encrypted %d legacy plaintext points', migrated)
 
     async def shutdown(self):
         """Cleanup resources on application shutdown."""

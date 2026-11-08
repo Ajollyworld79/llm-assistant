@@ -11,6 +11,24 @@ from typing import List, Dict, Any
 
 MODELS: List[Dict[str, Any]] = [
     {
+        "id": "gemini-3.6-flash",
+        "label": "Gemini 3.6 Flash",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Stable Flash with thinking. Default primary — no shutdown date announced.",
+    },
+    {
+        "id": "gemini-3.5-flash-lite",
+        "label": "Gemini 3.5 Flash-Lite",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Stable Lite. Default fallback — replaces 3.1-flash-lite (shutdown May 7, 2027).",
+    },
+    {
         "id": "gemini-flash-latest",
         "label": "Gemini Flash (latest)",
         "vendor": "Google",

@@ -9,7 +9,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
     <link rel="stylesheet" href="/static/styles.css?v={{ asset_v }}">
     <link rel="stylesheet" href="/static/backend.css?v={{ asset_v }}">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js" integrity="sha384-Sse/HDqcypGpyTDpvZOJNnG0TT3feGQUkF9H+mnRvic+LjR+K1NhTt8f51KIQ3v3" crossorigin="anonymous"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -24,7 +24,7 @@
     {% if locked %}
     <div class="lock-banner">READ-ONLY DEMO &middot; uploads, deletes and model changes are disabled</div>
     {% else %}
-    <div class="lock-banner lock-banner-unlocked">UNLOCKED &middot; running in dev mode</div>
+    <div class="lock-banner lock-banner-unlocked">Public view &middot; operator actions require a token</div>
     {% endif %}
     <div id="connection-banner" class="connection-banner">
         <span data-conn="qdrant">○ Qdrant</span>
@@ -33,6 +33,7 @@
         <span data-conn="logger">○ Logger</span>
         <span data-conn="usage_db">○ Usage DB</span>
         <span data-conn="chat_db">○ Chat DB</span>
+        <span id="stale-indicator" class="stale-indicator" hidden></span>
     </div>
     <nav class="bk-tabs" role="tablist">
         <button class="bk-tab active" data-tab="overview" onclick="setTab('overview')">Overview</button>
@@ -319,39 +320,41 @@
     <div class="conv-header">
         <div>
             <h2>Conversations</h2>
-            <p class="bk-help">Recent chat exchanges. Backend: <span id="conv-backend">—</span>. <span id="conv-auth-note"></span></p>
+            <p class="bk-help">Recent chat exchanges (operator only). Backend: <span id="conv-backend">—</span>. <span id="conv-auth-note"></span></p>
         </div>
-        {% if not locked %}
+    </div>
+    <div class="conv-toolbar">
+        <input id="conv-search" class="conv-search" type="search" placeholder="Search questions, answers or thread id…" autocomplete="off" aria-label="Search conversations">
+        <span id="conv-count" class="conv-count" aria-live="polite"></span>
         <div class="conv-actions">
             <button id="conv-refresh-btn" class="conv-btn" onclick="refreshConversations()">Refresh</button>
+            {% if not locked %}
             <button id="conv-clear-btn" class="conv-btn conv-btn-danger" onclick="clearAllConversations()">Delete all</button>
+            {% endif %}
         </div>
-        {% else %}
-        <div class="conv-actions">
-            <button id="conv-refresh-btn" class="conv-btn" onclick="refreshConversations()">Refresh</button>
-        </div>
-        {% endif %}
     </div>
     <div class="conv-table-wrap">
         <table class="conv-table" id="conv-table">
             <thead>
                 <tr>
-                    <th>Time</th>
+                    <th>Date/time</th>
                     <th>Thread</th>
                     <th>Question</th>
                     <th>Answer</th>
-                    <th>Embed</th>
-                    <th>AI</th>
-                    <th>Total</th>
-                    <th>Docs</th>
+                    <th class="num">Total ms</th>
+                    <th class="num">Tokens in/out</th>
+                    <th class="num">Docs</th>
                     <th>Model</th>
                     <th></th>
                 </tr>
             </thead>
             <tbody id="conv-tbody">
-                <tr><td colspan="10" style="padding:1rem; text-align:center; color:#888">Loading…</td></tr>
+                <tr><td colspan="9" class="conv-empty">Loading…</td></tr>
             </tbody>
         </table>
+    </div>
+    <div class="conv-more">
+        <button id="conv-more-btn" class="conv-btn" onclick="loadMoreConversations()" hidden>Load more</button>
     </div>
 </section>
 
@@ -365,6 +368,28 @@
             <button onclick="closeSourceModal()" class="close-btn">&times;</button>
         </div>
         <div class="modal-body" id="source-modal-text"></div>
+    </div>
+</div>
+
+<div id="conv-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="conv-modal-title">
+    <div class="modal-panel conv-modal-panel">
+        <div class="modal-header">
+            <span id="conv-modal-title">Conversation</span>
+            <button onclick="closeConvModal()" class="close-btn" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body conv-detail" id="conv-modal-body"></div>
+    </div>
+</div>
+
+<div id="confirm-modal" class="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="confirm-modal-msg">
+    <div class="modal-panel confirm-panel">
+        <div class="modal-body confirm-body">
+            <p id="confirm-modal-msg"></p>
+            <div class="confirm-actions">
+                <button id="confirm-modal-cancel" class="conv-btn conv-btn-neutral">Cancel</button>
+                <button id="confirm-modal-ok" class="conv-btn conv-btn-danger">Delete</button>
+            </div>
+        </div>
     </div>
 </div>
 
