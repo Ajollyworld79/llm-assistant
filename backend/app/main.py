@@ -97,6 +97,32 @@ _cors_origins = [o.strip() for o in os.environ.get('CORS_ALLOW_ORIGINS', '').spl
 if _cors_origins:
     app = cors(app, allow_origin=_cors_origins)
 
+# Inline scripts/handlers in the templates require 'unsafe-inline'; external scripts are
+# limited to the SRI-pinned jsDelivr files.
+_CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
+    "img-src 'self' data: blob:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+
+
+@app.after_request
+async def _security_headers(response):
+    headers = response.headers
+    headers.setdefault("Content-Security-Policy", _CSP)
+    headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    headers.setdefault("X-Content-Type-Options", "nosniff")
+    headers.setdefault("X-Frame-Options", "DENY")
+    headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
+
 # Register Middleware
 setup_middleware(app)
 
