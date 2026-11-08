@@ -55,7 +55,7 @@
   --bg-dark:       var(--ink);
 
   /* Typography */
-  --serif: "Schibsted Grotesk", "Instrument Sans", system-ui, sans-serif; /* display voice */
+  --serif: "Instrument Sans", system-ui, sans-serif; /* display voice (same family as body, heavier weights) */
   --sans:  "Instrument Sans", system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
   --mono:  "IBM Plex Mono", ui-monospace, "SF Mono", "Menlo", monospace;
 

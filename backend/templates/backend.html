@@ -12,7 +12,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js" integrity="sha384-Sse/HDqcypGpyTDpvZOJNnG0TT3feGQUkF9H+mnRvic+LjR+K1NhTt8f51KIQ3v3" crossorigin="anonymous"></script>
     <link rel="stylesheet" href="/static/fonts.css?v={{ asset_v }}">
 </head>
-<body class="backend-body">
+<body class="backend-body" data-read-only="{{ 'true' if locked else 'false' }}">
 
 <div class="backend-header">
     <div class="backend-title">
@@ -34,12 +34,12 @@
         <span id="stale-indicator" class="stale-indicator" hidden></span>
     </div>
     <nav class="bk-tabs" role="tablist">
-        <button class="bk-tab active" data-tab="overview" onclick="setTab('overview')">Overview</button>
-        <button class="bk-tab" data-tab="sources" onclick="setTab('sources')">Sources</button>
-        <button class="bk-tab" data-tab="models" onclick="setTab('models')">Models</button>
-        <button class="bk-tab" data-tab="prompt" onclick="setTab('prompt')">Prompt Playground</button>
-        <button class="bk-tab" data-tab="usage" onclick="setTab('usage')">Usage History</button>
-        <button class="bk-tab" data-tab="conversations" onclick="setTab('conversations')">Conversations</button>
+        <button class="bk-tab active" data-tab="overview">Overview</button>
+        <button class="bk-tab" data-tab="sources">Sources</button>
+        <button class="bk-tab" data-tab="models">Models</button>
+        <button class="bk-tab" data-tab="prompt">Prompt Playground</button>
+        <button class="bk-tab" data-tab="usage">Usage History</button>
+        <button class="bk-tab" data-tab="conversations">Conversations</button>
     </nav>
 </div>
 
@@ -180,10 +180,10 @@
         </div>
         <div class="conv-actions">
             {% if not locked %}
-            <button class="conv-btn" onclick="optimizeSources(event, this)">Optimize</button>
-            <button class="conv-btn conv-btn-danger" onclick="clearSources()">Clear all</button>
+            <button class="conv-btn" data-action="optimize-sources">Optimize</button>
+            <button class="conv-btn conv-btn-danger" data-action="clear-sources">Clear all</button>
             {% endif %}
-            <button class="conv-btn" onclick="refreshSources()">Refresh</button>
+            <button class="conv-btn" data-action="refresh-sources">Refresh</button>
         </div>
     </div>
 
@@ -201,26 +201,26 @@
                 </div>
             </div>
             {% else %}
-            <div class="drop-zone" id="source-drop-zone" onclick="document.getElementById('source-file-input').click()">
+            <div class="drop-zone" id="source-drop-zone" data-action="pick-source-file">
                 <svg class="icon-upload" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
                 <div>
                     <strong>Click to upload</strong> or drag files here
                 </div>
-                <input type="file" id="source-file-input" multiple hidden onchange="handleSourceFileSelect(event)" />
+                <input type="file" id="source-file-input" multiple hidden />
             </div>
             <div id="source-upload-queue" class="source-upload-queue" hidden>
                 <h4>Selected files</h4>
                 <div id="source-file-list" class="source-file-list"></div>
-                <button onclick="uploadSources()" id="source-upload-btn" class="btn btn-primary">Start upload</button>
+                <button data-action="upload-sources" id="source-upload-btn" class="btn btn-primary">Start upload</button>
                 <div id="source-upload-progress" class="source-upload-progress"></div>
             </div>
             <div class="operator-token">
                 <label class="bk-label">Private operator token</label>
                 <div class="operator-token-row">
                     <input id="operator-token-input" type="password" placeholder="Bearer token for mutation endpoints">
-                    <button onclick="saveOperatorToken()" class="btn btn-secondary btn-sm">Save</button>
+                    <button data-action="save-operator-token" class="btn btn-secondary btn-sm">Save</button>
                 </div>
             </div>
             {% endif %}
@@ -257,7 +257,7 @@
     <p class="bk-help">Browse available models and see the active primary/fallback setup. Switching is intentionally disabled in the public demo.</p>
     <div class="model-dropdowns">
         <div class="model-dropdown" id="model-dropdown-primary">
-            <button class="model-toggle" onclick="toggleDropdown('primary')">
+            <button class="model-toggle" data-action="toggle-dropdown" data-dropdown="primary">
                 <span class="model-role">PRIMARY</span>
                 <span class="model-active" id="dd-primary-active">—</span>
                 <span class="model-chevron">▾</span>
@@ -265,7 +265,7 @@
             <div class="model-list" id="dd-primary-list" hidden></div>
         </div>
         <div class="model-dropdown" id="model-dropdown-fallback">
-            <button class="model-toggle" onclick="toggleDropdown('fallback')">
+            <button class="model-toggle" data-action="toggle-dropdown" data-dropdown="fallback">
                 <span class="model-role">FALLBACK</span>
                 <span class="model-active" id="dd-fallback-active">—</span>
                 <span class="model-chevron">▾</span>
@@ -285,10 +285,10 @@
             <label class="bk-label">System prompt</label>
             <textarea id="prompt-system" class="prompt-area" spellcheck="false"></textarea>
             <div class="playground-actions">
-                <input type="file" id="prompt-import" accept=".txt,.md" hidden onchange="importPrompt(event)">
-                <button onclick="document.getElementById('prompt-import').click()">Import .txt</button>
-                <button onclick="exportPrompt()">Export .txt</button>
-                <button onclick="updatePreview()">Refresh preview</button>
+                <input type="file" id="prompt-import" accept=".txt,.md" hidden>
+                <button data-action="pick-prompt-file">Import .txt</button>
+                <button data-action="export-prompt">Export .txt</button>
+                <button data-action="update-preview">Refresh preview</button>
             </div>
         </div>
         <div>
@@ -325,9 +325,9 @@
         <input id="conv-search" class="conv-search" type="search" placeholder="Search questions, answers or thread id…" autocomplete="off" aria-label="Search conversations">
         <span id="conv-count" class="conv-count" aria-live="polite"></span>
         <div class="conv-actions">
-            <button id="conv-refresh-btn" class="conv-btn" onclick="refreshConversations()">Refresh</button>
+            <button id="conv-refresh-btn" class="conv-btn" data-action="refresh-conversations">Refresh</button>
             {% if not locked %}
-            <button id="conv-clear-btn" class="conv-btn conv-btn-danger" onclick="clearAllConversations()">Delete all</button>
+            <button id="conv-clear-btn" class="conv-btn conv-btn-danger" data-action="clear-conversations">Delete all</button>
             {% endif %}
         </div>
     </div>
@@ -352,7 +352,7 @@
         </table>
     </div>
     <div class="conv-more">
-        <button id="conv-more-btn" class="conv-btn" onclick="loadMoreConversations()" hidden>Load more</button>
+        <button id="conv-more-btn" class="conv-btn" data-action="load-more-conversations" hidden>Load more</button>
     </div>
 </section>
 
@@ -363,7 +363,7 @@
     <div class="modal-panel">
         <div class="modal-header">
             <span id="source-modal-title">Document Viewer</span>
-            <button onclick="closeSourceModal()" class="close-btn">&times;</button>
+            <button data-action="close-source-modal" class="close-btn">&times;</button>
         </div>
         <div class="modal-body" id="source-modal-text"></div>
     </div>
@@ -373,7 +373,7 @@
     <div class="modal-panel conv-modal-panel">
         <div class="modal-header">
             <span id="conv-modal-title">Conversation</span>
-            <button onclick="closeConvModal()" class="close-btn" aria-label="Close">&times;</button>
+            <button data-action="close-conv-modal" class="close-btn" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body conv-detail" id="conv-modal-body"></div>
     </div>
@@ -391,7 +391,6 @@
     </div>
 </div>
 
-<script>window.HELIOS_READ_ONLY = {{ 'true' if locked else 'false' }};</script>
 <script src="/static/backend.js?v={{ asset_v }}"></script>
 </body>
 </html>

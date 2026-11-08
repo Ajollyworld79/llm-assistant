@@ -97,11 +97,11 @@ _cors_origins = [o.strip() for o in os.environ.get('CORS_ALLOW_ORIGINS', '').spl
 if _cors_origins:
     app = cors(app, allow_origin=_cors_origins)
 
-# Inline scripts/handlers in the templates require 'unsafe-inline'; external scripts are
-# limited to the SRI-pinned jsDelivr files.
+# No inline scripts or on*= handlers: scripts are limited to same-origin files and the
+# SRI-pinned jsDelivr files. (Inline style attributes still need style-src 'unsafe-inline'.)
 _CSP = "; ".join([
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    "script-src 'self' https://cdn.jsdelivr.net",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self'",
     "img-src 'self' data: blob:",
@@ -377,6 +377,9 @@ async def health_middleware():
         logger.exception('Failed to get middleware stats: %s', e)
         return jsonify({"error": "internal_error"}), 500
 
+# Changes on every deploy so browsers fetch fresh CSS/JS (same scheme as the console).
+ASSET_VERSION = int(time.time())
+
 
 @app.route('/')
 async def index():
@@ -385,7 +388,8 @@ async def index():
     demo_mode = bool(getattr(settings, 'demo', False))
     locked = bool(demo_is_locked())
     response = await make_response(
-        await render_template('index.html', welcome_prompt=welcome_prompt, demo_mode=demo_mode, locked=locked)
+        await render_template('index.html', welcome_prompt=welcome_prompt, demo_mode=demo_mode, locked=locked,
+                              asset_v=ASSET_VERSION)
     )
     try:
         secure = request.scheme == 'https' or request.headers.get('X-Forwarded-Proto', '').split(',')[0].strip().lower() == 'https'

@@ -31,7 +31,7 @@ function authHeaders() {
 }
 
 function isReadOnlyDemo() {
-    return Boolean(window.HELIOS_READ_ONLY);
+    return document.body.dataset.readOnly === 'true';
 }
 
 function escapeHtml(s) {
@@ -1037,7 +1037,39 @@ function pollTick() {
 
 // ---------- bootstrap ----------
 
+// Static markup carries data-* attributes instead of inline on*= handlers (CSP: no inline JS).
+const ACTIONS = {
+    'optimize-sources': (e, el) => optimizeSources(e, el),
+    'clear-sources': () => clearSources(),
+    'refresh-sources': () => refreshSources(),
+    'pick-source-file': () => document.getElementById('source-file-input').click(),
+    'upload-sources': () => uploadSources(),
+    'save-operator-token': () => saveOperatorToken(),
+    'toggle-dropdown': (e, el) => toggleDropdown(el.dataset.dropdown),
+    'pick-prompt-file': () => document.getElementById('prompt-import').click(),
+    'export-prompt': () => exportPrompt(),
+    'update-preview': () => updatePreview(),
+    'refresh-conversations': () => refreshConversations(),
+    'clear-conversations': () => clearAllConversations(),
+    'load-more-conversations': () => loadMoreConversations(),
+    'close-source-modal': () => closeSourceModal(),
+    'close-conv-modal': () => closeConvModal(),
+};
+
+function initActionHandlers() {
+    document.addEventListener('click', (e) => {
+        const tab = e.target.closest('.bk-tab[data-tab]');
+        if (tab) { setTab(tab.dataset.tab); return; }
+        const el = e.target.closest('[data-action]');
+        const fn = el && ACTIONS[el.dataset.action];
+        if (fn) fn(e, el);
+    });
+    document.getElementById('source-file-input')?.addEventListener('change', handleSourceFileSelect);
+    document.getElementById('prompt-import')?.addEventListener('change', importPrompt);
+}
+
 async function bootstrap() {
+    initActionHandlers();
     initSourceControls();
     initConversationControls();
     updateConvChrome();
