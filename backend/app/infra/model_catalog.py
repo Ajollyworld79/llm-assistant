@@ -1,15 +1,16 @@
-"""Static model catalog used by the backend viewer.
+# ruff: noqa: E501
+"""Static model catalog used by the operator console.
 
 Pricing is $0 because we are on the free Google AI Studio tier. The viewer
 reads `role` from this list and from settings.gemini_model to mark the active
 primary/fallback pair.
 """
+
 from __future__ import annotations
 
-from typing import List, Dict, Any
+from typing import Any
 
-
-MODELS: List[Dict[str, Any]] = [
+MODELS: list[dict[str, Any]] = [
     {
         "id": "gemini-3.6-flash",
         "label": "Gemini 3.6 Flash",
@@ -53,7 +54,7 @@ MODELS: List[Dict[str, Any]] = [
         "input_per_m_usd": 0.0,
         "output_per_m_usd": 0.0,
         "context_window": 1_000_000,
-        "description": "Stable Lite (released May 2026). Recommended as fallback — generous free-tier limits.",
+        "description": "Stable Lite (released May 2026). Superseded by 3.5-flash-lite; shuts down May 7, 2027.",
     },
     {
         "id": "gemini-2.5-flash",
@@ -85,10 +86,10 @@ MODELS: List[Dict[str, Any]] = [
 ]
 
 
-def catalog_for_viewer(active_primary: str, active_fallback: str) -> List[Dict[str, Any]]:
+def catalog_for_viewer(active_primary: str, active_fallback: str) -> list[dict[str, Any]]:
     """Return MODELS with `role` annotation based on the configured model ids."""
-    primary_l = (active_primary or '').strip().lower()
-    fallback_l = (active_fallback or '').strip().lower()
+    primary_l = (active_primary or "").strip().lower()
+    fallback_l = (active_fallback or "").strip().lower()
 
     out = []
     for m in MODELS:

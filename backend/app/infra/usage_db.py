@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Postgres-backed usage history for the /backend graphs.
 
 Schema:
@@ -9,23 +10,19 @@ If DATABASE_URL is not set or asyncpg is unavailable, the module falls back to
 an in-memory deque (capped at 5000 events) so local dev works without postgres.
 Inserts are fire-and-forget — never block a request on a logging failure.
 """
+
 from __future__ import annotations
 
-import asyncio
 import datetime
 import logging
-import os
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+import asyncpg
+
+from backend.app.infra.tasks import spawn
 
 logger = logging.getLogger(__name__)
-
-try:
-    import asyncpg  # type: ignore
-    HAS_ASYNCPG = True
-except ImportError:
-    asyncpg = None  # type: ignore
-    HAS_ASYNCPG = False
 
 
 _SCHEMA_SQL = """
@@ -64,19 +61,41 @@ CREATE INDEX IF NOT EXISTS chat_events_thread_idx ON chat_events (thread_id);
 
 
 class UsageDB:
-    def __init__(self) -> None:
-        self._pool: Optional[Any] = None
-        self._database_url: Optional[str] = os.getenv('DATABASE_URL')
+    def __init__(self, database_url: str | None = None) -> None:
+        self._pool: Any | None = None
+        self._database_url: str | None = database_url
         self._mem_events: deque = deque(maxlen=5000)
         self._mem_chats: deque = deque(maxlen=2000)
         self._mem_chat_seq: int = 0
         self._initialized = False
+        self.init_error = False
 
     @property
     def backend_kind(self) -> str:
         if self._pool is not None:
-            return 'postgres'
-        return 'memory'
+            return "postgres"
+        return "memory"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._database_url)
+
+    async def ping(self) -> bool:
+        """True when the Postgres pool answers a trivial query."""
+        if self._pool is None:
+            return False
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+        except (asyncpg.PostgresError, OSError, TimeoutError):
+            return False
+        return True
+
+    async def count_chats(self) -> int:
+        if self._pool is not None:
+            async with self._pool.acquire() as conn:
+                return int(await conn.fetchval("SELECT count(*) FROM chat_events"))
+        return len(self._mem_chats)
 
     @property
     def enabled(self) -> bool:
@@ -86,9 +105,8 @@ class UsageDB:
         if self._initialized:
             return
         self._initialized = True
-        if not self._database_url or not HAS_ASYNCPG:
-            logger.info("UsageDB: using in-memory backend (DATABASE_URL=%s, asyncpg=%s)",
-                        bool(self._database_url), HAS_ASYNCPG)
+        if not self._database_url:
+            logger.info("UsageDB: DATABASE_URL not set, using in-memory backend")
             return
         try:
             self._pool = await asyncpg.create_pool(self._database_url, min_size=1, max_size=4)
@@ -96,24 +114,34 @@ class UsageDB:
                 await conn.execute(_SCHEMA_SQL)
             logger.info("UsageDB: postgres pool ready and schema ensured")
         except Exception as e:
-            logger.exception("UsageDB: failed to init postgres, falling back to memory: %s", e)
+            logger.error("UsageDB: failed to init postgres (%s), falling back to memory", type(e).__name__)
             self._pool = None
+            self.init_error = True
 
     async def shutdown(self) -> None:
         if self._pool is not None:
             try:
                 await self._pool.close()
             except Exception:
-                pass
+                logger.debug("UsageDB pool close failed")
             self._pool = None
 
-    def log_event(self, *, session_id: Optional[str], endpoint: str,
-                  model: Optional[str], tokens_input: int = 0, tokens_output: int = 0,
-                  tokens_cached: int = 0, latency_ms: int = 0,
-                  status_code: int = 200, error_kind: Optional[str] = None) -> None:
+    def log_event(
+        self,
+        *,
+        session_id: str | None,
+        endpoint: str,
+        model: str | None,
+        tokens_input: int = 0,
+        tokens_output: int = 0,
+        tokens_cached: int = 0,
+        latency_ms: int = 0,
+        status_code: int = 200,
+        error_kind: str | None = None,
+    ) -> None:
         """Fire-and-forget insert. Never raises to caller."""
         record = {
-            "ts": datetime.datetime.now(datetime.timezone.utc),
+            "ts": datetime.datetime.now(datetime.UTC),
             "session_id": session_id or "",
             "endpoint": endpoint,
             "model": model or "",
@@ -125,32 +153,52 @@ class UsageDB:
             "error_kind": error_kind,
         }
         if self._pool is not None:
-            asyncio.create_task(self._insert_pg(record))
+            spawn(self._insert_pg(record))
         else:
             self._mem_events.append(record)
 
-    async def _insert_pg(self, record: Dict[str, Any]) -> None:
+    async def _insert_pg(self, record: dict[str, Any]) -> None:
+        pool = self._pool
+        if pool is None:
+            return
         try:
-            async with self._pool.acquire() as conn:  # type: ignore
+            async with pool.acquire() as conn:
                 await conn.execute(
                     """INSERT INTO usage_events
                        (ts, session_id, endpoint, model, tokens_input, tokens_output,
                         tokens_cached, latency_ms, status_code, error_kind)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
-                    record["ts"], record["session_id"], record["endpoint"], record["model"],
-                    record["tokens_input"], record["tokens_output"], record["tokens_cached"],
-                    record["latency_ms"], record["status_code"], record["error_kind"],
+                    record["ts"],
+                    record["session_id"],
+                    record["endpoint"],
+                    record["model"],
+                    record["tokens_input"],
+                    record["tokens_output"],
+                    record["tokens_cached"],
+                    record["latency_ms"],
+                    record["status_code"],
+                    record["error_kind"],
                 )
         except Exception as e:
             logger.warning("usage_events insert failed: %s", e, exc_info=True)
 
-    def log_chat(self, *, thread_id: Optional[str], query: str, answer: str,
-                 embed_ms: int = 0, ai_ms: int = 0, total_ms: int = 0,
-                 model: Optional[str] = None, tokens_input: int = 0,
-                 tokens_output: int = 0, doc_count: int = 0) -> None:
+    def log_chat(
+        self,
+        *,
+        thread_id: str | None,
+        query: str,
+        answer: str,
+        embed_ms: int = 0,
+        ai_ms: int = 0,
+        total_ms: int = 0,
+        model: str | None = None,
+        tokens_input: int = 0,
+        tokens_output: int = 0,
+        doc_count: int = 0,
+    ) -> None:
         """Fire-and-forget insert of a chat exchange. Never raises."""
         record = {
-            "ts": datetime.datetime.now(datetime.timezone.utc),
+            "ts": datetime.datetime.now(datetime.UTC),
             "thread_id": thread_id or "",
             "query": query or "",
             "answer": answer or "",
@@ -163,30 +211,40 @@ class UsageDB:
             "doc_count": int(doc_count or 0),
         }
         if self._pool is not None:
-            asyncio.create_task(self._insert_chat_pg(record))
+            spawn(self._insert_chat_pg(record))
         else:
             self._mem_chat_seq += 1
             record["id"] = self._mem_chat_seq
             self._mem_chats.append(record)
 
-    async def _insert_chat_pg(self, record: Dict[str, Any]) -> None:
+    async def _insert_chat_pg(self, record: dict[str, Any]) -> None:
+        pool = self._pool
+        if pool is None:
+            return
         try:
-            async with self._pool.acquire() as conn:  # type: ignore
+            async with pool.acquire() as conn:
                 await conn.execute(
                     """INSERT INTO chat_events
                        (ts, thread_id, query, answer, embed_ms, ai_ms, total_ms,
                         model, tokens_input, tokens_output, doc_count)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
-                    record["ts"], record["thread_id"], record["query"], record["answer"],
-                    record["embed_ms"], record["ai_ms"], record["total_ms"],
-                    record["model"], record["tokens_input"], record["tokens_output"],
+                    record["ts"],
+                    record["thread_id"],
+                    record["query"],
+                    record["answer"],
+                    record["embed_ms"],
+                    record["ai_ms"],
+                    record["total_ms"],
+                    record["model"],
+                    record["tokens_input"],
+                    record["tokens_output"],
                     record["doc_count"],
                 )
         except Exception as e:
             logger.warning("chat_events insert failed: %s", e, exc_info=True)
 
     @staticmethod
-    def _chat_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    def _chat_row(r: dict[str, Any]) -> dict[str, Any]:
         ts = r.get("ts")
         return {
             "id": r.get("id"),
@@ -203,8 +261,7 @@ class UsageDB:
             "doc_count": r.get("doc_count") or 0,
         }
 
-    async def list_chats(self, limit: int = 50, before_id: Optional[int] = None,
-                         q: Optional[str] = None) -> Dict[str, Any]:
+    async def list_chats(self, limit: int = 50, before_id: int | None = None, q: str | None = None) -> dict[str, Any]:
         """Page of chat events newest-first: {items, total, next_before_id}.
 
         `total` counts rows matching `q` (ignoring paging). `q` is a
@@ -219,7 +276,7 @@ class UsageDB:
         q = (q or "").strip() or None
 
         if self._pool is not None:
-            params: List[Any] = []
+            params: list[Any] = []
             filt = ""
             if q:
                 esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -232,14 +289,12 @@ class UsageDB:
                 page_where += (" AND " if filt else " WHERE ") + f"id < ${len(page_params)}"
             page_params.append(limit + 1)
             try:
-                async with self._pool.acquire() as conn:  # type: ignore
-                    total = int(await conn.fetchval(
-                        "SELECT count(*) FROM chat_events" + filt, *params))
+                async with self._pool.acquire() as conn:
+                    total = int(await conn.fetchval("SELECT count(*) FROM chat_events" + filt, *params))  # noqa: S608 - filt is built from fixed fragments
                     rows = await conn.fetch(
                         "SELECT id, ts, thread_id, query, answer, embed_ms, ai_ms, "
                         "total_ms, model, tokens_input, tokens_output, doc_count "
-                        "FROM chat_events" + page_where +
-                        f" ORDER BY id DESC LIMIT ${len(page_params)}",
+                        "FROM chat_events" + page_where + f" ORDER BY id DESC LIMIT ${len(page_params)}",
                         *page_params,
                     )
             except Exception:
@@ -249,7 +304,8 @@ class UsageDB:
         else:
             needle = q.lower() if q else None
             matched = [
-                r for r in reversed(self._mem_chats)
+                r
+                for r in reversed(self._mem_chats)
                 if needle is None
                 or needle in (r.get("query") or "").lower()
                 or needle in (r.get("answer") or "").lower()
@@ -258,7 +314,7 @@ class UsageDB:
             total = len(matched)
             if before_id is not None:
                 matched = [r for r in matched if (r.get("id") or 0) < int(before_id)]
-            items = [self._chat_row(r) for r in matched[:limit + 1]]
+            items = [self._chat_row(r) for r in matched[: limit + 1]]
 
         next_before_id = None
         if len(items) > limit:
@@ -269,7 +325,7 @@ class UsageDB:
     async def delete_chat(self, chat_id: int) -> bool:
         if self._pool is not None:
             try:
-                async with self._pool.acquire() as conn:  # type: ignore
+                async with self._pool.acquire() as conn:
                     res = await conn.execute("DELETE FROM chat_events WHERE id = $1", int(chat_id))
                     # res is e.g. "DELETE 1"
                     parts = res.split()
@@ -287,7 +343,7 @@ class UsageDB:
     async def delete_all_chats(self) -> int:
         if self._pool is not None:
             try:
-                async with self._pool.acquire() as conn:  # type: ignore
+                async with self._pool.acquire() as conn:
                     res = await conn.execute("DELETE FROM chat_events")
                     parts = res.split()
                     return int(parts[-1]) if parts and parts[-1].isdigit() else 0
@@ -298,10 +354,10 @@ class UsageDB:
         self._mem_chats.clear()
         return n
 
-    async def query_summary(self) -> Dict[str, Any]:
+    async def query_summary(self) -> dict[str, Any]:
         if self._pool is not None:
             try:
-                async with self._pool.acquire() as conn:  # type: ignore
+                async with self._pool.acquire() as conn:
                     row = await conn.fetchrow("""
                         SELECT
                             COUNT(*) FILTER (WHERE ts >= now() - interval '24 hours') AS req_24h,
@@ -317,7 +373,7 @@ class UsageDB:
             except Exception as e:
                 logger.debug("usage_events query_summary failed: %s", e)
         # In-memory aggregate
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         cutoff_24h = now - datetime.timedelta(hours=24)
         cutoff_7d = now - datetime.timedelta(days=7)
         e24 = [e for e in self._mem_events if e["ts"] >= cutoff_24h]
@@ -331,7 +387,7 @@ class UsageDB:
             "errors_24h": sum(1 for e in e24 if e.get("error_kind")),
         }
 
-    async def query_timeseries(self, metric: str, range_label: str = "24h") -> List[Dict[str, Any]]:
+    async def query_timeseries(self, metric: str, range_label: str = "24h") -> list[dict[str, Any]]:
         """Return [{ts, value}] bucketed for the requested metric and range."""
         if range_label == "7d":
             interval = "7 days"
@@ -352,7 +408,7 @@ class UsageDB:
 
         if self._pool is not None:
             try:
-                async with self._pool.acquire() as conn:  # type: ignore
+                async with self._pool.acquire() as conn:
                     rows = await conn.fetch(f"""
                         SELECT date_trunc('{bucket.split()[1]}', ts) AS bucket,
                                {metric_expr} AS value
@@ -360,7 +416,7 @@ class UsageDB:
                         WHERE ts >= now() - interval '{interval}'
                         GROUP BY bucket
                         ORDER BY bucket
-                    """)
+                    """)  # noqa: S608 - bucket/interval/metric come from whitelists
                     return [{"ts": r["bucket"].isoformat(), "value": float(r["value"])} for r in rows]
             except Exception as e:
                 logger.debug("usage_events query_timeseries failed: %s", e)
@@ -368,8 +424,8 @@ class UsageDB:
         # In-memory bucketed fallback
         return self._mem_timeseries(metric, range_label)
 
-    def _mem_timeseries(self, metric: str, range_label: str) -> List[Dict[str, Any]]:
-        now = datetime.datetime.now(datetime.timezone.utc)
+    def _mem_timeseries(self, metric: str, range_label: str) -> list[dict[str, Any]]:
+        now = datetime.datetime.now(datetime.UTC)
         if range_label == "7d":
             cutoff = now - datetime.timedelta(days=7)
             bucket_seconds = 3600
@@ -384,14 +440,15 @@ class UsageDB:
         if not relevant:
             return []
 
-        buckets: Dict[float, List[Dict[str, Any]]] = {}
+        buckets: dict[int, list[dict[str, Any]]] = {}
         for e in relevant:
             bts = int(e["ts"].timestamp() // bucket_seconds) * bucket_seconds
             buckets.setdefault(bts, []).append(e)
 
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for bts in sorted(buckets):
             es = buckets[bts]
+            value: float
             if metric == "requests":
                 value = len(es)
             elif metric == "tokens":
@@ -406,10 +463,12 @@ class UsageDB:
                 value = round(100.0 * fb / total, 1) if total > 0 else 0.0
             else:
                 value = len(es)
-            out.append({
-                "ts": datetime.datetime.fromtimestamp(bts, datetime.timezone.utc).isoformat(),
-                "value": float(value),
-            })
+            out.append(
+                {
+                    "ts": datetime.datetime.fromtimestamp(bts, datetime.UTC).isoformat(),
+                    "value": float(value),
+                }
+            )
         return out
 
 

@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """System prompt + structured-output schema for the IT support agent.
 
 Designed for Gemini Flash (gemini-3.6-flash primary, gemini-3.5-flash-lite
@@ -9,6 +10,10 @@ retrieved passages, user query, conversation history — belongs in the user
 message. Gemini supports explicit context caching for long stable prefixes;
 see https://ai.google.dev/gemini-api/docs/caching if cache hit ratio matters.
 """
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 # ---- System prompt ---------------------------------------------------------
 
@@ -145,24 +150,17 @@ JSON output:
 
 # ---- Structured output schema ---------------------------------------------
 
+
 # Pydantic model is the SDK-recommended way to drive response_schema with
 # google-genai — it handles type conversion (OpenAPI uppercase types, nullable
 # unions, etc.) automatically so we don't fight the schema format ourselves.
-from typing import Literal, Optional  # noqa: E402
-from pydantic import BaseModel, Field  # noqa: E402
-
-
 class ChatAnswer(BaseModel):
     source: Literal["documents", "general_knowledge", "refusal"] = Field(
         description="Where the answer comes from, or 'refusal' if out of scope."
     )
-    language: Literal["da", "en", "other"] = Field(
-        description="Language of answer_markdown."
-    )
-    answer_markdown: str = Field(
-        description="User-facing answer in Markdown. Refusals still get one polite sentence."
-    )
-    refusal_reason: Optional[str] = Field(
+    language: Literal["da", "en", "other"] = Field(description="Language of answer_markdown.")
+    answer_markdown: str = Field(description="User-facing answer in Markdown. Refusals still get one polite sentence.")
+    refusal_reason: str | None = Field(
         default=None,
         description="Short snake_case reason when source is 'refusal', otherwise null.",
     )

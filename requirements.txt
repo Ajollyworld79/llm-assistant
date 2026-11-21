@@ -1,37 +1,33 @@
-# Quart async web framework
-Quart==0.21.0
+# Web framework
+Quart==0.23.1
 quart-cors==0.8.0
-uvicorn[standard]==0.52.1
+uvicorn[standard]==0.54.0
 
-# Gemini (free Google AI Studio API, async-capable)
-google-genai==2.16.0
+# Gemini (chat + embeddings). Stay on the 2.x major.
+google-genai==2.34.0
 
-# Vector DB — must be >= the version that last wrote /app/qdrant_data: older
-# clients cannot read newer local-storage metadata (id_tracker field).
+# Vector DB: must be >= the version that last wrote /app/qdrant_data
+# (older clients cannot read newer local-storage metadata).
 qdrant-client==1.20.0
 
-# Embeddings: ONNX-based, no torch (used when EMBEDDING_PROVIDER=fastembed)
-fastembed==0.9.1
-
 # Document parsing
-pdfplumber==0.11.10
+pdfplumber==0.11.11
 python-docx==1.2.0
-pypdf==6.14.2
-PyMuPDF==1.28.0
-Pillow==13.0.0  # pulled in by pdfplumber/fastembed; 12.x has known CVEs
+pypdf==7.1.1
+Pillow==13.0.0
 
-# Logging
-loguru==0.7.3
+# Crypto (AES-256-GCM payload encryption). Stay on 3.x; the known-ciphertext
+# test in tests/test_crypto.py guards the stored enc:v1 format.
+pycryptodome==3.24.1
 
-# Process memory tracking (used by middleware + /backend metrics)
-psutil==7.2.2
+# Config and models
+python-dotenv==1.2.4
+pydantic==2.14.4
 
-# Crypto (AES-256-GCM payload encryption)
-pycryptodome==3.23.0
+# Postgres usage history (Railway provides DATABASE_URL)
+asyncpg==0.32.0
 
-# Config
-python-dotenv==1.2.2
-pydantic==2.13.4
-
-# Postgres for usage history — Railway provides DATABASE_URL
-asyncpg==0.31.0
+# Security floors for transitive dependencies (fixed advisories as of 2026-11)
+werkzeug>=3.1.9
+urllib3>=2.8.0
+certifi>=2026.11.20
