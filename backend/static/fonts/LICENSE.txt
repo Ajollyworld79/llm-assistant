@@ -1,0 +1,1 @@
+Instrument Sans and IBM Plex Mono are distributed via @fontsource under the SIL Open Font License 1.1 (https://openfontlicense.org). Only the Latin subset is shipped: Instrument Sans 400/500/600 and IBM Plex Mono 400.

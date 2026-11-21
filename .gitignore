@@ -4,6 +4,19 @@ __pycache__/
 *.pyc
 *.log
 *.bak
+
+# OS
+.DS_Store
+
+# Tooling caches and reports
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # node
 node_modules/
 dist/
@@ -14,7 +27,11 @@ dist/
 # Local Qdrant data (production uses a Railway volume at /app/qdrant_data)
 local_qdrant_db/
 qdrant_data/
+*.sqlite
+!tests/**/*.sqlite
 
 # Local secrets and logs
-backend/.env
+.env
+.env.*
+!.env.example
 backend/logs/

@@ -1,0 +1,7 @@
+Vendored browser libraries (no CDN). Update by replacing the file and this list.
+
+marked      18.2.1   MIT                         vendor/marked.min.js (esbuild-minified lib/marked.umd.js)
+DOMPurify   3.4.18   MPL-2.0 OR Apache-2.0       vendor/purify.min.js
+Chart.js    4.6.1    MIT                         vendor/chart.umd.min.js
+
+License texts: vendor/LICENSE-*.

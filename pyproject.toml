@@ -1,0 +1,47 @@
+[project]
+name = "llm-assistant"
+version = "1.0.0"
+description = "Helios: a RAG IT-support assistant built on Quart, Qdrant and Gemini"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.13"
+authors = [{ name = "Gustav Christensen" }]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+extend-exclude = [".venv", "local_qdrant_db", "qdrant_data", "backend/static/vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.13"
+files = ["backend/app"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+explicit_package_bases = true
+
+[tool.coverage.run]
+source = ["backend/app"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
