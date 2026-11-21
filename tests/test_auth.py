@@ -13,14 +13,22 @@ ADMIN_ROUTES = [
     ("POST", "/optimize"),
     ("POST", "/admin/upload_vectors"),
     ("GET", "/monitor"),
-    ("GET", "/backend/api/system"),
-    ("GET", "/backend/api/connections"),
-    ("GET", "/backend/api/metrics"),
     ("GET", "/backend/api/prompt"),
     ("GET", "/backend/api/conversations"),
     ("DELETE", "/backend/api/conversations"),
     ("DELETE", "/backend/api/conversations/1"),
 ]
+
+# The console's signed-out overview: public, allow-listed and free of host fingerprints.
+PUBLIC_OVERVIEW = ["/backend/api/system", "/backend/api/connections", "/backend/api/metrics"]
+
+
+@pytest.mark.parametrize("path", PUBLIC_OVERVIEW)
+async def test_overview_is_public_without_host_details(client, path):
+    r = await client.get(path)
+    assert r.status_code == 200
+    body = await r.get_data(as_text=True)
+    assert "python_version" not in body and "platform" not in body and "test-admin" not in body
 
 
 async def login(client, token="test-admin"):  # noqa: S107

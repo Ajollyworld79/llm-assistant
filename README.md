@@ -97,12 +97,13 @@ Optional fields: `images` and `thread_id`. `top_k` is clamped to `MAX_SEARCH_LIM
 | `GET /`, `GET /backend` | Public |
 | `GET /livez` | Public liveness probe, no dependency checks |
 | `GET /health` | Public health with dependency status |
+| `GET /backend/api/{system,connections,metrics,models,usage/*}` | Public console overview: allow-listed config and aggregate numbers only |
 | `POST /upload`, `GET /documents`, `GET`/`DELETE /document/<id>`, `/admin/*` | Operator |
-| `GET`/`DELETE /backend/api/conversations`, `/backend/api/{system,connections,metrics,prompt}`, `/monitor` | Operator |
+| `GET`/`DELETE /backend/api/conversations`, `GET /backend/api/prompt`, `/monitor` | Operator |
 
 ## Operator console
 
-`/backend` shows live status, models, prompt and usage. To manage documents and conversations, sign in with the admin token: the console calls `POST /backend/api/session`, which sets an HttpOnly, Secure, SameSite=Strict `helios_operator` cookie valid for 12 hours (`DELETE` signs out, `GET` reports the state). Cookie-authenticated requests also send `X-Requested-With: helios`. Scripts can use `Authorization: Bearer <ADMIN_TOKEN>` instead.
+`/backend` shows live status, models and usage to everyone. To read the prompt and manage documents and conversations, sign in with the admin token: the console calls `POST /backend/api/session`, which sets an HttpOnly, Secure, SameSite=Strict `helios_operator` cookie valid for 12 hours (`DELETE` signs out, `GET` reports the state). Cookie-authenticated requests also send `X-Requested-With: helios`. Scripts can use `Authorization: Bearer <ADMIN_TOKEN>` instead.
 
 ## Security and privacy
 
@@ -138,7 +139,7 @@ backend/
     infra/             rate_limit, usage_db, crypto, privacy, demo_lock, model_catalog, monitor, tasks
   templates/           index.html (chat), backend.html (console)
   static/              chat.js, backend.js, common.js, styles, fonts, vendor/
-tests/                 pytest suite (213 tests)
+tests/                 pytest suite (94% line coverage of backend/app)
 ```
 <!-- /project-tree -->
 

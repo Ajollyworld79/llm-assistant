@@ -10,7 +10,8 @@
 
     const SESSION_URL = '/backend/api/session';
     const LOCKED = document.body.dataset.readOnly === 'true';
-    const STATE = { authed: false };
+    // null until the first session check, so the signed-out view is applied once on load.
+    const STATE = { authed: null };
 
     const POLL = { system: 30_000, connections: 5_000, metrics: 5_000, usage: 30_000, retry: 30_000 };
     const MEMORY_CEILING_MB = 1024;
@@ -100,12 +101,14 @@
         if (value) {
             refreshSources();
             refreshConversations();
+            loadPrompt();
         } else {
             showSourcesSignedOut();
             CONV.items = [];
             CONV.next = null;
             CONV.error = 'unauthorized';
             renderConversations();
+            $('prompt-preview').textContent = 'Sign in as operator to view the system prompt.';
         }
     }
 
@@ -907,7 +910,6 @@
         showSourcesSignedOut();
         renderConversations();
         checkSession();
-        loadPrompt();
         pollTick();
         setInterval(pollTick, 1000);
         document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTick(); });

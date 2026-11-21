@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import platform
-import sys
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -34,8 +32,9 @@ async def index() -> str:
     return await render_template("backend.html", locked=svc.settings.demo_locked, asset_v=svc.asset_version)
 
 
+# Overview data is public by design (the console's signed-out view shows system status);
+# it is allow-listed and aggregate only. The prompt and conversations stay operator-only.
 @bp.get("/api/system")
-@require_admin
 async def api_system() -> Response:
     s = services().settings
     git_sha = os.environ.get("GIT_SHA") or os.environ.get("RAILWAY_GIT_COMMIT_SHA") or None
@@ -50,8 +49,6 @@ async def api_system() -> Response:
             "git_sha": git_sha[:12] if git_sha else None,
             "deployed_at": os.environ.get("RAILWAY_DEPLOYMENT_STARTED_AT", ""),
             "uptime_seconds": int(time.time() - _START),
-            "python_version": sys.version.split()[0],
-            "platform": platform.system(),
             "demo_locked": s.demo_locked,
             "config": s.public_view,
         }
@@ -73,7 +70,6 @@ async def _cached(key: str, fn: Callable[[], Awaitable[int | None]]) -> int | No
 
 
 @bp.get("/api/connections")
-@require_admin
 async def api_connections() -> Response:
     svc = services()
     s = svc.settings
@@ -121,7 +117,6 @@ async def _count_chats() -> int:
 
 
 @bp.get("/api/metrics")
-@require_admin
 async def api_metrics() -> Response:
     svc = services()
     stats = svc.monitor.stats()
