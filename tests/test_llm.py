@@ -1,3 +1,9 @@
+import asyncio
+import dataclasses
+
+import pytest
+
+from backend.app.core.config import ConfigError
 from backend.app.services.llm import (
     TRUNCATION_NOTE,
     DemoLLM,
@@ -64,11 +70,32 @@ async def test_primary_model_success_reports_usage(prod_settings):
     assert models.models_called == [prod_settings.gemini_model]
 
 
+@pytest.mark.parametrize(("level", "expected"), [("low", "LOW"), ("minimal", "MINIMAL"), ("", None)])
+async def test_thinking_level_is_sent_to_gemini(prod_settings, level, expected):
+    llm, models = make(dataclasses.replace(prod_settings, gemini_thinking_level=level))
+    await llm.answer("q", "ctx")
+    thinking = models.configs[0].thinking_config
+    assert (thinking.thinking_level.value if thinking else None) == expected
+
+
+def test_invalid_thinking_level_is_rejected(prod_settings):
+    with pytest.raises(ConfigError, match="GEMINI_THINKING_LEVEL"):
+        dataclasses.replace(prod_settings, gemini_thinking_level="extreme").validate()
+
+
 async def test_primary_failure_uses_fallback(prod_settings):
     llm, models = make(prod_settings, {prod_settings.gemini_model: RuntimeError("503")})
     result = await llm.answer("q", "x" * 10000)
     assert result.answer == "fake answer" and result.usage.fallback
     assert models.models_called == [prod_settings.gemini_model, prod_settings.gemini_model_fallback]
+
+
+async def test_hanging_primary_times_out_to_fallback(prod_settings):
+    settings = dataclasses.replace(prod_settings, gemini_timeout=0.05)
+    llm, models = make(settings, {settings.gemini_model: "hang"})
+    result = await asyncio.wait_for(llm.answer("q", "ctx"), 2)
+    assert result.ok and result.answer == "fake answer" and result.usage.fallback
+    assert models.models_called == [settings.gemini_model, settings.gemini_model_fallback]
 
 
 async def test_both_models_failing_is_unavailable(prod_settings):

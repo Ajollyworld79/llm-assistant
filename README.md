@@ -7,7 +7,7 @@ Helios is a retrieval-augmented IT-support assistant. Documents are parsed, chun
 ## Features
 
 - Document ingestion (PDF, DOCX, TXT, Markdown, CSV, Windows `.url` shortcuts) with chunking and Gemini embeddings; unsupported, empty or corrupt files are rejected instead of indexed
-- Semantic search over Qdrant with a grounded Gemini answer, primary model plus fallback model
+- Semantic search over Qdrant with a grounded Gemini answer (Flash-Lite, low reasoning); each model call is time-boxed and falls back to a second model
 - Public chat UI with image attachments and per-thread history
 - Operator console: status, models, prompt, usage, documents and conversations
 - Payload encryption at rest (AES-256-GCM), per-IP/per-session rate limits for browser traffic, and a daily token budget for everyone
@@ -86,7 +86,7 @@ Optional fields: `images` and `thread_id`. `top_k` is clamped to `MAX_SEARCH_LIM
   "embed_ms": 120,
   "ai_ms": 900,
   "total_ms": 1050,
-  "model": "gemini-3.6-flash"
+  "model": "gemini-3.5-flash-lite"
 }
 ```
 

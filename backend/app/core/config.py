@@ -15,6 +15,7 @@ from dotenv import find_dotenv, load_dotenv
 
 _TRUE = ("1", "true", "yes", "on")
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
+THINKING_LEVELS = ("", "minimal", "low", "medium", "high")
 
 
 class ConfigError(RuntimeError):
@@ -70,10 +71,17 @@ class Settings:
 
     # Gemini
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-3.6-flash"
-    gemini_model_fallback: str = "gemini-3.5-flash-lite"
+    # Lite models answer grounded RAG prompts in seconds on the free tier; full Flash models
+    # queued for 50-90 s or returned 429/503 when measured (Nov 2026).
+    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_model_fallback: str = "gemini-3.1-flash-lite"
+    # Seconds before a model call is abandoned in favour of the fallback model.
+    gemini_timeout: float = 20.0
     max_tokens: int = 2000
     temperature: float = 0.1
+    # Reasoning effort for Gemini 3.x ("minimal", "low", "medium", "high"; empty = model default).
+    # Grounded answers from retrieved text need little reasoning; higher levels cost seconds and tokens.
+    gemini_thinking_level: str = "low"
     max_context_chars: int = 6000
 
     # Secrets
@@ -122,8 +130,10 @@ class Settings:
             gemini_api_key=e.get("GEMINI_API_KEY") or e.get("GOOGLE_API_KEY") or None,
             gemini_model=e.get("GEMINI_MODEL", defaults.gemini_model),
             gemini_model_fallback=e.get("GEMINI_MODEL_FALLBACK", defaults.gemini_model_fallback),
+            gemini_timeout=e.number("GEMINI_TIMEOUT", defaults.gemini_timeout),
             max_tokens=e.integer("MAX_TOKENS", defaults.max_tokens),
             temperature=e.number("TEMPERATURE", defaults.temperature),
+            gemini_thinking_level=e.get("GEMINI_THINKING_LEVEL", defaults.gemini_thinking_level).strip().lower(),
             max_context_chars=e.integer("MAX_CONTEXT_CHARS", defaults.max_context_chars),
             admin_token=e.get("ADMIN_TOKEN") or None,
             search_api_token=e.get("SEARCH_API_TOKEN") or None,
@@ -146,6 +156,8 @@ class Settings:
         """Refuse to start with an unsafe production configuration."""
         if self.embedding_dim < 1:
             raise ConfigError("EMBEDDING_DIM must be positive")
+        if self.gemini_thinking_level not in THINKING_LEVELS:
+            raise ConfigError(f"GEMINI_THINKING_LEVEL must be one of: {', '.join(THINKING_LEVELS[1:])} (or empty)")
         if self.demo:
             return
         if self.embedding_provider != "gemini":
@@ -167,6 +179,7 @@ class Settings:
             "max_search_limit",
             "max_tokens",
             "temperature",
+            "gemini_thinking_level",
             "max_context_chars",
             "demo_match_ratio",
             "demo_min_match_score",

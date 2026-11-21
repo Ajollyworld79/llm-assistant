@@ -12,22 +12,22 @@ from typing import Any
 
 MODELS: list[dict[str, Any]] = [
     {
-        "id": "gemini-3.6-flash",
-        "label": "Gemini 3.6 Flash",
-        "vendor": "Google",
-        "input_per_m_usd": 0.0,
-        "output_per_m_usd": 0.0,
-        "context_window": 1_000_000,
-        "description": "Stable Flash with thinking. Default primary — no shutdown date announced.",
-    },
-    {
         "id": "gemini-3.5-flash-lite",
         "label": "Gemini 3.5 Flash-Lite",
         "vendor": "Google",
         "input_per_m_usd": 0.0,
         "output_per_m_usd": 0.0,
         "context_window": 1_000_000,
-        "description": "Stable Lite. Default fallback — replaces 3.1-flash-lite (shutdown May 7, 2027).",
+        "description": "Default primary. Answered the RAG prompt in 1-5 s on the free tier with low reasoning.",
+    },
+    {
+        "id": "gemini-3.6-flash",
+        "label": "Gemini 3.6 Flash",
+        "vendor": "Google",
+        "input_per_m_usd": 0.0,
+        "output_per_m_usd": 0.0,
+        "context_window": 1_000_000,
+        "description": "Stable Flash with thinking. Took 50-70 s per answer on the free tier, so it is no longer the default.",
     },
     {
         "id": "gemini-flash-latest",
@@ -54,7 +54,7 @@ MODELS: list[dict[str, Any]] = [
         "input_per_m_usd": 0.0,
         "output_per_m_usd": 0.0,
         "context_window": 1_000_000,
-        "description": "Stable Lite (released May 2026). Superseded by 3.5-flash-lite; shuts down May 7, 2027.",
+        "description": "Default fallback: a separate model, so a 503 on 3.5-flash-lite does not stop answers. Shuts down May 7, 2027 — pick a new fallback before then.",
     },
     {
         "id": "gemini-2.5-flash",

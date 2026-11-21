@@ -171,7 +171,7 @@ async def test_console_endpoints_with_operator_token(client):
     metrics = await (await client.get("/backend/api/metrics", headers=ADMIN)).get_json()
     assert metrics["rate_limit"]["daily_token_budget"] == 50000 and metrics["memory_mb"] > 0
     models = await (await client.get("/backend/api/models")).get_json()
-    assert models["active_primary"] == "gemini-3.6-flash"
+    assert models["active_primary"] == Settings().gemini_model
     assert system["git_sha"] is None or isinstance(system["git_sha"], str)
     assert system["uptime_seconds"] >= 0
     series = await client.get("/backend/api/usage/timeseries?metric=tokens&range=7d")

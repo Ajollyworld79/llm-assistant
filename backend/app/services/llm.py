@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -131,12 +132,14 @@ class LLMService:
     async def _call(self, model: str, contents: list[Any]) -> Any:
         from google.genai import types
 
+        level = self.settings.gemini_thinking_level
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             temperature=self.settings.temperature,
             max_output_tokens=self.settings.max_tokens,
             response_mime_type="application/json",
             response_schema=ChatAnswer,
+            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel(level.upper())) if level else None,
         )
         if self._client is None:
             raise RuntimeError("Gemini client not configured")
@@ -171,7 +174,9 @@ class LLMService:
         blocked = False
         for model, is_fallback in models:
             try:
-                response = await self._call(model, contents)
+                # A free-tier model can queue for a minute; give up early so the fallback still
+                # answers inside the caller's timeout (the portfolio proxy waits 45 s in total).
+                response = await asyncio.wait_for(self._call(model, contents), s.gemini_timeout)
             except Exception as exc:
                 blocked = blocked or self._is_block(exc)
                 logger.warning("Model %s failed (%s)", model, type(exc).__name__)

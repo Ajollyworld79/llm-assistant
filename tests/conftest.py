@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from types import SimpleNamespace
@@ -55,12 +56,16 @@ class FakeModels(FakeEmbeddings):
         super().__init__(dim)
         self.behaviours = behaviours
         self.models_called: list[str] = []
+        self.configs: list[Any] = []
 
     async def generate_content(self, *, model: str, contents: Any, config: Any) -> Any:
         self.models_called.append(model)
+        self.configs.append(config)
         outcome = self.behaviours.get(model, "ok")
         if isinstance(outcome, Exception):
             raise outcome
+        if outcome == "hang":  # a free-tier model stuck in Google's queue
+            await asyncio.sleep(3600)
         text = '{"source":"documents","language":"en","answer_markdown":"fake answer","refusal_reason":null}'
         usage = SimpleNamespace(
             prompt_token_count=100, candidates_token_count=20, total_token_count=120, cached_content_token_count=10
