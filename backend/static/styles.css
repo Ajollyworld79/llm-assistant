@@ -677,7 +677,14 @@ td strong { color: var(--ink); font-weight: 600; }
 .msg-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); color: var(--ink-mute); font-size: var(--fs-xs); }
 .msg-meta svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 2px; }
 
+.results { width: 100%; }
 .results-label { margin: 0; color: var(--ink-mute); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+summary.results-label { display: inline-flex; align-items: center; gap: var(--s-2); min-height: 32px; cursor: pointer; list-style: none; border-radius: var(--r-1); }
+summary.results-label::-webkit-details-marker { display: none; }
+summary.results-label::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s ease; }
+.results[open] > summary.results-label::before { transform: rotate(45deg); }
+summary.results-label:hover { color: var(--ink); }
+.results[open] > .results-grid { margin-top: var(--s-2); }
 .results-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); width: 100%; }
 
 .result-card {

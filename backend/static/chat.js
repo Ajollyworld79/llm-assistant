@@ -243,10 +243,13 @@
         main.appendChild(bubble);
 
         if (results && results.length > 0) {
-            main.appendChild(el('p', 'results-label', `Sources (${results.length})`));
+            // Collapsed by default: the answer comes first, sources on request.
+            const sources = el('details', 'results');
+            sources.appendChild(el('summary', 'results-label', `Sources (${results.length})`));
             const grid = el('div', 'results-grid');
             results.forEach((r) => grid.appendChild(buildResultCard(r, results)));
-            main.appendChild(grid);
+            sources.appendChild(grid);
+            main.appendChild(sources);
         }
 
         if (type === 'bot' && meta && meta.totalMs != null) {
