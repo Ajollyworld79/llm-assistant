@@ -2,395 +2,419 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Helios — Console</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Helios Console</title>
+    <meta name="description" content="Helios Console: system status, source library, models, prompt, usage and conversations for the Helios retrieval-augmented assistant.">
+    <meta name="theme-color" content="#14171C">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Helios Console">
+    <meta property="og:description" content="Operations console for the Helios retrieval-augmented assistant.">
+    <meta property="og:site_name" content="Helios">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+    <link rel="preload" href="/static/fonts/instrument-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/fonts/instrument-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="/static/fonts.css?v={{ asset_v }}">
     <link rel="stylesheet" href="/static/styles.css?v={{ asset_v }}">
     <link rel="stylesheet" href="/static/backend.css?v={{ asset_v }}">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js" integrity="sha384-Sse/HDqcypGpyTDpvZOJNnG0TT3feGQUkF9H+mnRvic+LjR+K1NhTt8f51KIQ3v3" crossorigin="anonymous"></script>
-    <link rel="stylesheet" href="/static/fonts.css?v={{ asset_v }}">
+    <script defer src="/static/vendor/chart.umd.min.js?v={{ asset_v }}"></script>
+    <script defer src="/static/common.js?v={{ asset_v }}"></script>
+    <script defer src="/static/backend.js?v={{ asset_v }}"></script>
 </head>
-<body class="backend-body" data-read-only="{{ 'true' if locked else 'false' }}">
+<body class="console" data-read-only="{{ 'true' if locked else 'false' }}" data-auth="false">
+<a class="skip-link" href="#main">Skip to content</a>
 
-<div class="backend-header">
-    <div class="backend-title">
-        <h1>Operations</h1>
-        <a href="/" class="btn btn-secondary btn-sm">← Back to chat</a>
+<header class="console-bar">
+    <div class="console-bar-inner">
+        <a class="console-brand" href="/" aria-label="Helios, back to chat">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <circle cx="12" cy="12" r="4" stroke-width="2"/>
+                <path stroke-linecap="round" stroke-width="2" d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/>
+            </svg>
+            <span>Helios</span>
+        </a>
+        <span class="console-bar-title">Console</span>
+        <div class="console-bar-actions">
+            <a href="/" class="btn btn-sm bar-btn bar-back">Back to chat</a>
+            <span class="session-label" id="session-label" data-show-when="in">Signed in as operator</span>
+            <button type="button" class="btn btn-sm bar-btn" data-action="open-login" data-show-when="out">Operator sign-in</button>
+            <button type="button" class="btn btn-sm bar-btn" data-action="logout" data-show-when="in">Sign out</button>
+        </div>
     </div>
+</header>
+
+<main id="main" class="console-shell">
+    <div class="console-head">
+        <h1>Helios Console</h1>
+        <ul class="conn-list" id="connection-banner" aria-label="Service connections">
+            <li class="chip" data-conn="qdrant"><span class="dot" aria-hidden="true"></span><span class="chip-label">Vector store</span><span class="sr-only chip-state">status unknown</span></li>
+            <li class="chip" data-conn="gemini"><span class="dot" aria-hidden="true"></span><span class="chip-label">Gemini</span><span class="sr-only chip-state">status unknown</span></li>
+            <li class="chip" data-conn="embedding_model"><span class="dot" aria-hidden="true"></span><span class="chip-label">Embeddings</span><span class="sr-only chip-state">status unknown</span></li>
+            <li class="chip" data-conn="logger"><span class="dot" aria-hidden="true"></span><span class="chip-label">Logger</span><span class="sr-only chip-state">status unknown</span></li>
+            <li class="chip" data-conn="usage_db"><span class="dot" aria-hidden="true"></span><span class="chip-label">Usage DB</span><span class="sr-only chip-state">status unknown</span></li>
+            <li class="chip" data-conn="chat_db"><span class="dot" aria-hidden="true"></span><span class="chip-label">Chat DB</span><span class="sr-only chip-state">status unknown</span></li>
+            <li class="chip chip-warn" id="stale-indicator" hidden></li>
+        </ul>
+    </div>
+
     {% if locked %}
-    <div class="lock-banner">READ-ONLY DEMO &middot; uploads, deletes and model changes are disabled</div>
+    <p class="notice" role="note">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span><strong>Read-only demo.</strong> Uploads, deletes and model changes are disabled. Signing in unlocks viewing sources and conversations only.</span>
+    </p>
     {% else %}
-    <div class="lock-banner lock-banner-unlocked">Public view &middot; operator actions require a token</div>
+    <p class="notice" role="note" data-show-when="out">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span><strong>Public view.</strong> System status is visible to everyone. Sign in as operator to manage sources and read conversations.</span>
+    </p>
     {% endif %}
-    <div id="connection-banner" class="connection-banner">
-        <span data-conn="qdrant">○ Qdrant</span>
-        <span data-conn="gemini">○ Gemini</span>
-        <span data-conn="embedding_model">○ Embedding</span>
-        <span data-conn="logger">○ Logger</span>
-        <span data-conn="usage_db">○ Usage DB</span>
-        <span data-conn="chat_db">○ Chat DB</span>
-        <span id="stale-indicator" class="stale-indicator" hidden></span>
-    </div>
-    <nav class="bk-tabs" role="tablist">
-        <button class="bk-tab active" data-tab="overview">Overview</button>
-        <button class="bk-tab" data-tab="sources">Sources</button>
-        <button class="bk-tab" data-tab="models">Models</button>
-        <button class="bk-tab" data-tab="prompt">Prompt Playground</button>
-        <button class="bk-tab" data-tab="usage">Usage History</button>
-        <button class="bk-tab" data-tab="conversations">Conversations</button>
-    </nav>
-</div>
 
-<main class="backend-main">
-
-<!-- ====== TAB: OVERVIEW ====== -->
-<section class="bk-tab-panel active" id="tab-overview">
-    <h2>System &amp; status</h2>
-    <p class="bk-help">Real-time inspection of the stack powering Helios. This console exposes state, metrics and configuration without granting write access.</p>
-
-    <div class="runtime-pipeline" aria-label="Runtime pipeline">
-        <div class="pipeline-step">
-            <span class="pipeline-kicker">Ingress</span>
-            <strong>Chat UI</strong>
-            <small>Browser session</small>
-        </div>
-        <div class="pipeline-link"></div>
-        <div class="pipeline-step">
-            <span class="pipeline-kicker">App</span>
-            <strong>Quart ASGI</strong>
-            <small id="runtime-provider">provider sync</small>
-        </div>
-        <div class="pipeline-link"></div>
-        <div class="pipeline-step">
-            <span class="pipeline-kicker">Retrieve</span>
-            <strong id="runtime-embed">Embedding</strong>
-            <small><span id="runtime-qdrant-points">—</span> vector points</small>
-        </div>
-        <div class="pipeline-link"></div>
-        <div class="pipeline-step">
-            <span class="pipeline-kicker">Reason</span>
-            <strong id="runtime-primary">Primary LLM</strong>
-            <small>streamed response</small>
+    <div class="tabs-scroll">
+        <div class="bk-tabs" role="tablist" aria-label="Console sections">
+            <button type="button" class="bk-tab" role="tab" id="tab-btn-overview" aria-controls="tab-overview" aria-selected="true" data-tab="overview">Overview</button>
+            <button type="button" class="bk-tab" role="tab" id="tab-btn-sources" aria-controls="tab-sources" aria-selected="false" tabindex="-1" data-tab="sources">Sources</button>
+            <button type="button" class="bk-tab" role="tab" id="tab-btn-models" aria-controls="tab-models" aria-selected="false" tabindex="-1" data-tab="models">Models</button>
+            <button type="button" class="bk-tab" role="tab" id="tab-btn-prompt" aria-controls="tab-prompt" aria-selected="false" tabindex="-1" data-tab="prompt">Prompt</button>
+            <button type="button" class="bk-tab" role="tab" id="tab-btn-usage" aria-controls="tab-usage" aria-selected="false" tabindex="-1" data-tab="usage">Usage</button>
+            <button type="button" class="bk-tab" role="tab" id="tab-btn-conversations" aria-controls="tab-conversations" aria-selected="false" tabindex="-1" data-tab="conversations">Conversations</button>
         </div>
     </div>
 
-    <div class="tile-grid">
-        <div class="tile">
-            <div class="tile-label">Primary model</div>
-            <div class="tile-value" id="tile-primary-model">—</div>
-            <div class="tile-sub">Cache hit: <span id="tile-cache-ratio">—</span></div>
-            <div class="tile-dot" id="tile-primary-dot"></div>
-        </div>
-        <div class="tile">
-            <div class="tile-label">Fallback model</div>
-            <div class="tile-value" id="tile-fallback-model">—</div>
-            <div class="tile-sub">Triggered: <span id="tile-fallback-count">0</span> times</div>
-            <div class="tile-dot" id="tile-fallback-dot"></div>
-        </div>
-        <div class="tile">
-            <div class="tile-label">Embedding model</div>
-            <div class="tile-value" id="tile-embed-model">—</div>
-            <div class="tile-sub" id="tile-embed-dim">— dim</div>
-            <div class="tile-dot" id="tile-embed-dot"></div>
-        </div>
-        <div class="tile">
-            <div class="tile-label">Vector store</div>
-            <div class="tile-value">Qdrant local</div>
-            <div class="tile-sub"><span id="tile-qdrant-points">—</span> points</div>
-            <div class="tile-dot" id="tile-qdrant-dot"></div>
-        </div>
-        <div class="tile">
-            <div class="tile-label">LLM provider</div>
-            <div class="tile-value" id="tile-region">—</div>
-            <div class="tile-sub">Free tier</div>
-            <div class="tile-dot tile-dot-green"></div>
-        </div>
-    </div>
+    <div class="console-main">
 
-    <h3 class="bk-subheading">Live metrics</h3>
-    <div class="metric-scope-grid">
-        <div class="metric-scope">
-            <div class="metric-topline">
-                <span class="metric-label">Memory</span>
-                <span class="metric-unit">process</span>
+    <!-- ====== OVERVIEW ====== -->
+    <section class="bk-tab-panel" id="tab-overview" role="tabpanel" aria-labelledby="tab-btn-overview" tabindex="0">
+        <h2>System status</h2>
+        <p class="bk-help">Live state of the stack behind Helios: models, vector index and process metrics.</p>
+
+        <ol class="flow" aria-label="Request flow">
+            <li class="flow-step">
+                <span class="flow-kicker">1 · Ask</span>
+                <strong>Chat</strong>
+                <small>Browser session</small>
+            </li>
+            <li class="flow-step">
+                <span class="flow-kicker">2 · Route</span>
+                <strong>Application</strong>
+                <small id="runtime-provider">—</small>
+            </li>
+            <li class="flow-step">
+                <span class="flow-kicker">3 · Retrieve</span>
+                <strong id="runtime-embed">Embeddings</strong>
+                <small><span id="runtime-qdrant-points">—</span> indexed chunks</small>
+            </li>
+            <li class="flow-step">
+                <span class="flow-kicker">4 · Answer</span>
+                <strong id="runtime-primary">Answer model</strong>
+                <small>Grounded in retrieved sources</small>
+            </li>
+        </ol>
+
+        <div class="tile-grid">
+            <div class="tile">
+                <div class="tile-label">Primary model</div>
+                <div class="tile-value" id="tile-primary-model">—</div>
+                <div class="tile-sub">Cache hit: <span id="tile-cache-ratio">—</span></div>
+                <span class="tile-dot dot" id="tile-primary-dot" role="img" aria-label="Status unknown"></span>
             </div>
-            <div class="metric-value"><span id="m-memory">—</span> <small>MB</small></div>
-            <div class="metric-bar" aria-hidden="true"><span id="g-memory-bar"></span></div>
-            <div class="metric-meta" id="g-memory-meta">Measured against a 1 GB soft ceiling</div>
+            <div class="tile">
+                <div class="tile-label">Fallback model</div>
+                <div class="tile-value" id="tile-fallback-model">—</div>
+                <div class="tile-sub">Used <span id="tile-fallback-count">0</span> times</div>
+                <span class="tile-dot dot" id="tile-fallback-dot" role="img" aria-label="Status unknown"></span>
+            </div>
+            <div class="tile">
+                <div class="tile-label">Embedding model</div>
+                <div class="tile-value" id="tile-embed-model">—</div>
+                <div class="tile-sub" id="tile-embed-dim">—</div>
+                <span class="tile-dot dot" id="tile-embed-dot" role="img" aria-label="Status unknown"></span>
+            </div>
+            <div class="tile">
+                <div class="tile-label">Vector store</div>
+                <div class="tile-value">Qdrant</div>
+                <div class="tile-sub"><span id="tile-qdrant-points">—</span> points</div>
+                <span class="tile-dot dot" id="tile-qdrant-dot" role="img" aria-label="Status unknown"></span>
+            </div>
+            <div class="tile">
+                <div class="tile-label">Model provider</div>
+                <div class="tile-value" id="tile-region">—</div>
+                <div class="tile-sub" id="build-info">—</div>
+            </div>
         </div>
-        <div class="metric-scope">
-            <div class="metric-topline">
-                <span class="metric-label">Avg latency</span>
-                <span class="metric-unit">rolling</span>
+
+        <h3 class="bk-subheading">Live metrics</h3>
+        <div class="metric-grid">
+            <div class="metric">
+                <div class="metric-label">Memory</div>
+                <div class="metric-value"><span id="m-memory">—</span> <small>MB</small></div>
+                <progress class="bar" id="g-memory-bar" max="100" value="0" aria-label="Memory use against a 1 GB soft ceiling"></progress>
+                <div class="metric-meta" id="g-memory-meta">Measured against a 1 GB soft ceiling</div>
             </div>
-            <div class="metric-value"><span id="m-latency">—</span> <small>ms</small></div>
-            <div class="metric-bar metric-bar-warm" aria-hidden="true"><span id="g-latency-bar"></span></div>
-            <div class="metric-meta" id="g-latency-meta">Target under 3,000 ms</div>
-        </div>
-        <div class="metric-scope">
-            <div class="metric-topline">
-                <span class="metric-label">Cache hit</span>
-                <span class="metric-unit">session</span>
+            <div class="metric">
+                <div class="metric-label">Average latency</div>
+                <div class="metric-value"><span id="m-latency">—</span> <small>ms</small></div>
+                <progress class="bar bar-warm" id="g-latency-bar" max="100" value="0" aria-label="Latency against the 3,000 ms target"></progress>
+                <div class="metric-meta" id="g-latency-meta">Target under 3,000 ms</div>
             </div>
-            <div class="metric-value"><span id="m-cache">—</span> <small>%</small></div>
-            <div class="metric-bar metric-bar-cool" aria-hidden="true"><span id="g-cache-bar"></span></div>
-            <div class="metric-meta" id="g-cache-meta">Prompt/model cache efficiency</div>
-        </div>
-        <div class="metric-scope">
-            <div class="metric-topline">
-                <span class="metric-label">Requests total</span>
-                <span class="metric-unit">traffic</span>
+            <div class="metric">
+                <div class="metric-label">Cache hit rate</div>
+                <div class="metric-value"><span id="m-cache">—</span> <small>%</small></div>
+                <progress class="bar bar-cool" id="g-cache-bar" max="100" value="0" aria-label="Cache hit rate"></progress>
+                <div class="metric-meta" id="g-cache-meta">Share of prompts served from cache</div>
             </div>
-            <div class="metric-value"><span id="m-requests">—</span></div>
-            <div class="metric-spark" aria-hidden="true">
-                <span></span><span></span><span></span><span></span><span id="g-requests-bar"></span>
+            <div class="metric">
+                <div class="metric-label">Requests handled</div>
+                <div class="metric-value"><span id="m-requests">—</span></div>
+                <div class="metric-meta" id="g-requests-meta">Since the service last started</div>
             </div>
-            <div class="metric-meta" id="g-requests-meta">Lifetime request counter</div>
-        </div>
-        <div class="metric-scope metric-scope-wide">
-            <div class="metric-topline">
-                <span class="metric-label">Token budget</span>
-                <span class="metric-unit">daily guardrail</span>
-            </div>
-            <div class="budget-readout">
+            <div class="metric metric-wide">
+                <div class="metric-label">Daily token budget</div>
                 <div class="metric-value metric-value-tight" id="g-token-readout">— / —</div>
-                <div class="budget-ring" aria-hidden="true">
-                    <span id="g-token-ring"></span>
-                </div>
+                <progress class="bar bar-budget" id="g-token-bar" max="100" value="0" aria-label="Daily token budget used"></progress>
+                <div class="metric-meta" id="g-token-meta">Resets after the daily window</div>
             </div>
-            <div class="metric-bar metric-bar-budget" aria-hidden="true"><span id="g-token-bar"></span></div>
-            <div class="metric-meta" id="g-token-meta">Resets after the daily window</div>
         </div>
-    </div>
 
-    <details class="config-dump">
-        <summary>Show full config (sanitized)</summary>
-        <pre id="config-pre">loading…</pre>
-    </details>
-</section>
+        <details class="config-dump">
+            <summary>Show full configuration (secrets removed)</summary>
+            <pre id="config-pre">Loading…</pre>
+        </details>
+    </section>
 
-<!-- ====== TAB: SOURCES ====== -->
-<section class="bk-tab-panel" id="tab-sources" hidden>
-    <div class="conv-header">
-        <div>
-            <h2>Source Library</h2>
-            <p class="bk-help">Inspect the indexed RAG corpus. In the public demo this surface is read-only; private operator mode can upload, optimize, and delete sources.</p>
+    <!-- ====== SOURCES ====== -->
+    <section class="bk-tab-panel" id="tab-sources" role="tabpanel" aria-labelledby="tab-btn-sources" tabindex="0" hidden>
+        <div class="section-head">
+            <div>
+                <h2>Source library</h2>
+                <p class="bk-help">The documents the assistant retrieves from. Sign in as operator to view or manage them.</p>
+            </div>
+            <div class="section-actions">
+                {% if not locked %}
+                <button type="button" class="btn btn-secondary btn-sm" data-action="optimize-sources" data-show-when="in">Optimize index</button>
+                <button type="button" class="btn btn-danger btn-sm" data-action="clear-sources" data-show-when="in">Clear all</button>
+                {% endif %}
+                <button type="button" class="btn btn-secondary btn-sm" data-action="refresh-sources" data-show-when="in">Refresh</button>
+            </div>
         </div>
-        <div class="conv-actions">
-            {% if not locked %}
-            <button class="conv-btn" data-action="optimize-sources">Optimize</button>
-            <button class="conv-btn conv-btn-danger" data-action="clear-sources">Clear all</button>
-            {% endif %}
-            <button class="conv-btn" data-action="refresh-sources">Refresh</button>
-        </div>
-    </div>
 
-    <div class="source-grid">
-        <div class="panel source-control-panel">
-            <h3>{% if locked %}Locked corpus{% else %}Ingest documents{% endif %}</h3>
-            <p>{% if locked %}Uploads are disabled in this public demo so visitors can inspect the system without changing the RAG index.{% else %}Upload handbooks, policies, SOPs, and reference files. Supported: PDF, DOCX, TXT, CSV. Max 10MB per file.{% endif %}</p>
-
+        <div class="source-grid">
             {% if locked %}
-            <div class="read-only-panel">
-                <div class="read-only-mark">LOCKED</div>
-                <div>
-                    <strong>Mutation endpoints are closed.</strong>
-                    <span>Upload, delete, reset, optimize, and model switching actions return 403 while the demo lock is active.</span>
-                </div>
+            <div class="card">
+                <h3>Locked corpus</h3>
+                <p>Uploads are disabled in this public demo, so visitors can look around without changing the index.</p>
             </div>
             {% else %}
-            <div class="drop-zone" id="source-drop-zone" data-action="pick-source-file">
-                <svg class="icon-upload" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                <div>
-                    <strong>Click to upload</strong> or drag files here
+            <div class="card">
+                <h3>Add documents</h3>
+                <div data-show-when="out">
+                    <p>Sign in as operator to upload handbooks, policies and reference files.</p>
+                    <button type="button" class="btn btn-primary" data-action="open-login">Operator sign-in</button>
                 </div>
-                <input type="file" id="source-file-input" multiple hidden />
-            </div>
-            <div id="source-upload-queue" class="source-upload-queue" hidden>
-                <h4>Selected files</h4>
-                <div id="source-file-list" class="source-file-list"></div>
-                <button data-action="upload-sources" id="source-upload-btn" class="btn btn-primary">Start upload</button>
-                <div id="source-upload-progress" class="source-upload-progress"></div>
-            </div>
-            <div class="operator-token">
-                <label class="bk-label">Private operator token</label>
-                <div class="operator-token-row">
-                    <input id="operator-token-input" type="password" placeholder="Bearer token for mutation endpoints">
-                    <button data-action="save-operator-token" class="btn btn-secondary btn-sm">Save</button>
+                <div data-show-when="in">
+                    <p>PDF, DOCX, TXT or CSV, up to 10 MB per file.</p>
+                    <button type="button" class="drop-zone" id="source-drop-zone" data-action="pick-source-file">
+                        <svg class="icon-upload" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        </svg>
+                        <span><strong>Choose files</strong> or drag them here</span>
+                    </button>
+                    <input type="file" id="source-file-input" accept=".pdf,.docx,.txt,.csv" multiple hidden>
+                    <div id="source-upload-queue" class="upload-queue" hidden>
+                        <h4 class="queue-title">Selected files</h4>
+                        <ul id="source-file-list" class="source-file-list"></ul>
+                        <button type="button" id="source-upload-btn" class="btn btn-primary" data-action="upload-sources">Start upload</button>
+                    </div>
+                    <p id="source-upload-progress" class="upload-progress" role="status"></p>
                 </div>
             </div>
             {% endif %}
-        </div>
 
-        <div class="panel source-list-panel">
-            <div class="section-header">
-                <h3>Indexed sources</h3>
-                <div class="status-indicator">System <span id="source-status-badge" class="badge badge-txt">checking...</span></div>
-            </div>
-            <div class="table-responsive">
-                <table class="doc-table">
-                    <thead>
-                        <tr>
-                            <th>Document Name</th>
-                            <th>Type</th>
-                            <th>Indexed At</th>
-                            <th>Chunks</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="sources-list">
-                        <tr><td colspan="5" style="text-align:center; padding: 2rem;">Loading sources...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</section>
-
-<!-- ====== TAB: MODELS ====== -->
-<section class="bk-tab-panel" id="tab-models" hidden>
-    <h2>Models</h2>
-    <p class="bk-help">Browse available models and see the active primary/fallback setup. Switching is intentionally disabled in the public demo.</p>
-    <div class="model-dropdowns">
-        <div class="model-dropdown" id="model-dropdown-primary">
-            <button class="model-toggle" data-action="toggle-dropdown" data-dropdown="primary">
-                <span class="model-role">PRIMARY</span>
-                <span class="model-active" id="dd-primary-active">—</span>
-                <span class="model-chevron">▾</span>
-            </button>
-            <div class="model-list" id="dd-primary-list" hidden></div>
-        </div>
-        <div class="model-dropdown" id="model-dropdown-fallback">
-            <button class="model-toggle" data-action="toggle-dropdown" data-dropdown="fallback">
-                <span class="model-role">FALLBACK</span>
-                <span class="model-active" id="dd-fallback-active">—</span>
-                <span class="model-chevron">▾</span>
-            </button>
-            <div class="model-list" id="dd-fallback-list" hidden></div>
-        </div>
-    </div>
-    <button class="model-apply" disabled title="Disabled in demo — contact us to configure model switching">Apply change</button>
-</section>
-
-<!-- ====== TAB: PROMPT PLAYGROUND ====== -->
-<section class="bk-tab-panel" id="tab-prompt" hidden>
-    <h2>Prompt Playground</h2>
-    <p class="bk-help">Inspect the current system prompt and preview what would be sent to the model. This is a local preview only; changes are not persisted server-side.</p>
-    <div class="playground-grid">
-        <div>
-            <label class="bk-label">System prompt</label>
-            <textarea id="prompt-system" class="prompt-area" spellcheck="false"></textarea>
-            <div class="playground-actions">
-                <input type="file" id="prompt-import" accept=".txt,.md" hidden>
-                <button data-action="pick-prompt-file">Import .txt</button>
-                <button data-action="export-prompt">Export .txt</button>
-                <button data-action="update-preview">Refresh preview</button>
+            <div class="card card-flush">
+                <div class="card-head">
+                    <h3>Indexed sources</h3>
+                    <span id="source-status-badge" class="badge">Sign in to view</span>
+                </div>
+                <div class="table-wrap table-bare">
+                    <table class="doc-table">
+                        <caption class="sr-only">Indexed source documents</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Document</th>
+                                <th scope="col">Type</th>
+                                <th scope="col">Indexed</th>
+                                <th scope="col" class="num">Chunks</th>
+                                <th scope="col"><span class="sr-only">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="sources-list">
+                            <tr><td colspan="5" class="table-note">Loading sources…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
-        <div>
-            <label class="bk-label">Outgoing request preview</label>
-            <pre id="prompt-preview" class="prompt-preview">loading…</pre>
-            <button class="playground-send" disabled title="Disabled in demo — use the chat page to test">Send to model</button>
-            <div class="playground-note">Local preview only. Server-side prompt unchanged.</div>
-        </div>
-    </div>
-</section>
+    </section>
 
-<!-- ====== TAB: USAGE HISTORY ====== -->
-<section class="bk-tab-panel" id="tab-usage" hidden>
-    <h2>Usage History</h2>
-    <p class="bk-help">Backend: <span id="usage-backend">—</span>. Refreshes every 30 seconds.</p>
-    <div class="usage-summary" id="usage-summary">loading…</div>
-    <div class="chart-grid">
-        <div class="chart-card"><h4>Requests / hour (24h)</h4><div class="chart-canvas-wrap"><canvas id="chart-requests"></canvas></div></div>
-        <div class="chart-card"><h4>Tokens / hour (24h)</h4><div class="chart-canvas-wrap"><canvas id="chart-tokens"></canvas></div></div>
-        <div class="chart-card"><h4>Cache hit % (7d)</h4><div class="chart-canvas-wrap"><canvas id="chart-cache"></canvas></div></div>
-        <div class="chart-card"><h4>Fallback rate % (7d)</h4><div class="chart-canvas-wrap"><canvas id="chart-fallback"></canvas></div></div>
-    </div>
-</section>
-
-<!-- ====== TAB: CONVERSATIONS ====== -->
-<section class="bk-tab-panel" id="tab-conversations" hidden>
-    <div class="conv-header">
-        <div>
-            <h2>Conversations</h2>
-            <p class="bk-help">Recent chat exchanges (operator only). Backend: <span id="conv-backend">—</span>. <span id="conv-auth-note"></span></p>
+    <!-- ====== MODELS ====== -->
+    <section class="bk-tab-panel" id="tab-models" role="tabpanel" aria-labelledby="tab-btn-models" tabindex="0" hidden>
+        <h2>Models</h2>
+        <p class="bk-help">The active primary and fallback models, with the catalogue they come from. Models are chosen with server environment variables.</p>
+        <div class="model-dropdowns">
+            <div class="model-dropdown">
+                <button type="button" class="model-toggle" data-action="toggle-dropdown" data-dropdown="primary"
+                        aria-expanded="false" aria-controls="dd-primary-list">
+                    <span class="model-role">Primary</span>
+                    <span class="model-active" id="dd-primary-active">—</span>
+                    <svg class="model-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l6 6 6-6"/></svg>
+                </button>
+                <div class="model-list" id="dd-primary-list" hidden></div>
+            </div>
+            <div class="model-dropdown">
+                <button type="button" class="model-toggle" data-action="toggle-dropdown" data-dropdown="fallback"
+                        aria-expanded="false" aria-controls="dd-fallback-list">
+                    <span class="model-role">Fallback</span>
+                    <span class="model-active" id="dd-fallback-active">—</span>
+                    <svg class="model-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l6 6 6-6"/></svg>
+                </button>
+                <div class="model-list" id="dd-fallback-list" hidden></div>
+            </div>
         </div>
-    </div>
-    <div class="conv-toolbar">
-        <input id="conv-search" class="conv-search" type="search" placeholder="Search questions, answers or thread id…" autocomplete="off" aria-label="Search conversations">
-        <span id="conv-count" class="conv-count" aria-live="polite"></span>
-        <div class="conv-actions">
-            <button id="conv-refresh-btn" class="conv-btn" data-action="refresh-conversations">Refresh</button>
-            {% if not locked %}
-            <button id="conv-clear-btn" class="conv-btn conv-btn-danger" data-action="clear-conversations">Delete all</button>
-            {% endif %}
-        </div>
-    </div>
-    <div class="conv-table-wrap">
-        <table class="conv-table" id="conv-table">
-            <thead>
-                <tr>
-                    <th>Date/time</th>
-                    <th>Thread</th>
-                    <th>Question</th>
-                    <th>Answer</th>
-                    <th class="num">Total ms</th>
-                    <th class="num">Tokens in/out</th>
-                    <th class="num">Docs</th>
-                    <th>Model</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody id="conv-tbody">
-                <tr><td colspan="9" class="conv-empty">Loading…</td></tr>
-            </tbody>
-        </table>
-    </div>
-    <div class="conv-more">
-        <button id="conv-more-btn" class="conv-btn" data-action="load-more-conversations" hidden>Load more</button>
-    </div>
-</section>
+    </section>
 
+    <!-- ====== PROMPT ====== -->
+    <section class="bk-tab-panel" id="tab-prompt" role="tabpanel" aria-labelledby="tab-btn-prompt" tabindex="0" hidden>
+        <h2>Prompt</h2>
+        <p class="bk-help">Inspect the system prompt and preview what a request looks like. Edits here are a local preview only and are never saved to the server.</p>
+        <div class="playground-grid">
+            <div>
+                <label class="field-label" for="prompt-system">System prompt</label>
+                <textarea id="prompt-system" class="input prompt-area" spellcheck="false"></textarea>
+                <div class="playground-actions">
+                    <input type="file" id="prompt-import" accept=".txt,.md" hidden>
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="pick-prompt-file">Import .txt</button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="export-prompt">Export .txt</button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="update-preview">Refresh preview</button>
+                </div>
+            </div>
+            <div>
+                <span class="field-label" id="prompt-preview-label">Outgoing request preview</span>
+                <pre id="prompt-preview" class="prompt-preview" aria-labelledby="prompt-preview-label" tabindex="0">Loading…</pre>
+                <p class="playground-note">The request template sent to the model is written in Danish, so the preview is too.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ====== USAGE ====== -->
+    <section class="bk-tab-panel" id="tab-usage" role="tabpanel" aria-labelledby="tab-btn-usage" tabindex="0" hidden>
+        <h2>Usage</h2>
+        <p class="bk-help">Storage backend: <span id="usage-backend">—</span>. Refreshes every 30 seconds.</p>
+        <p class="usage-summary" id="usage-summary">Loading…</p>
+        <div class="chart-grid">
+            <figure class="chart-card"><figcaption>Requests per hour, last 24 h</figcaption><div class="chart-canvas-wrap"><canvas id="chart-requests" role="img" aria-label="Line chart of requests per hour over the last 24 hours"></canvas></div></figure>
+            <figure class="chart-card"><figcaption>Tokens per hour, last 24 h</figcaption><div class="chart-canvas-wrap"><canvas id="chart-tokens" role="img" aria-label="Line chart of tokens per hour over the last 24 hours"></canvas></div></figure>
+            <figure class="chart-card"><figcaption>Cache hit rate %, last 7 days</figcaption><div class="chart-canvas-wrap"><canvas id="chart-cache" role="img" aria-label="Line chart of cache hit rate over the last 7 days"></canvas></div></figure>
+            <figure class="chart-card"><figcaption>Fallback rate %, last 7 days</figcaption><div class="chart-canvas-wrap"><canvas id="chart-fallback" role="img" aria-label="Line chart of fallback model rate over the last 7 days"></canvas></div></figure>
+        </div>
+    </section>
+
+    <!-- ====== CONVERSATIONS ====== -->
+    <section class="bk-tab-panel" id="tab-conversations" role="tabpanel" aria-labelledby="tab-btn-conversations" tabindex="0" hidden>
+        <div class="section-head">
+            <div>
+                <h2>Conversations</h2>
+                <p class="bk-help">Recent chat exchanges, visible to operators only. Storage backend: <span id="conv-backend">—</span>.</p>
+            </div>
+        </div>
+        <div class="conv-toolbar">
+            <label class="sr-only" for="conv-search">Search conversations</label>
+            <input id="conv-search" class="input conv-search" type="search" placeholder="Search questions, answers or thread id…" autocomplete="off">
+            <span id="conv-count" class="conv-count" aria-live="polite"></span>
+            <div class="section-actions">
+                <button type="button" id="conv-refresh-btn" class="btn btn-secondary btn-sm" data-action="refresh-conversations">Refresh</button>
+                {% if not locked %}
+                <button type="button" id="conv-clear-btn" class="btn btn-danger btn-sm" data-action="clear-conversations" data-show-when="in">Delete all</button>
+                {% endif %}
+            </div>
+        </div>
+        <div class="table-wrap">
+            <table class="conv-table" id="conv-table">
+                <caption class="sr-only">Recent conversations</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Time</th>
+                        <th scope="col" class="col-opt-sm">Thread</th>
+                        <th scope="col">Question</th>
+                        <th scope="col" class="col-opt">Answer</th>
+                        <th scope="col" class="num col-opt-sm">Latency</th>
+                        <th scope="col" class="num col-opt">Tokens in/out</th>
+                        <th scope="col" class="num col-opt">Docs</th>
+                        <th scope="col" class="col-opt">Model</th>
+                        <th scope="col"><span class="sr-only">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody id="conv-tbody">
+                    <tr><td colspan="9" class="table-note">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="conv-more">
+            <button type="button" id="conv-more-btn" class="btn btn-secondary" data-action="load-more-conversations" hidden>Load more</button>
+        </div>
+    </section>
+
+    </div>
 </main>
 
-
-<div id="source-modal" class="modal-backdrop">
-    <div class="modal-panel">
-        <div class="modal-header">
-            <span id="source-modal-title">Document Viewer</span>
-            <button data-action="close-source-modal" class="close-btn">&times;</button>
+<!-- Operator sign-in -->
+<dialog id="login-dialog" class="dialog dialog-narrow" aria-labelledby="login-title">
+    <form id="login-form" class="dialog-form" method="dialog" novalidate>
+        <h2 id="login-title">Operator sign-in</h2>
+        <p>Enter the operator token to manage sources and read conversations. The session lasts 12 hours.</p>
+        <div>
+            <label class="field-label" for="login-token">Operator token</label>
+            <input id="login-token" name="token" class="input" type="password" autocomplete="current-password" required spellcheck="false">
         </div>
-        <div class="modal-body" id="source-modal-text"></div>
-    </div>
-</div>
-
-<div id="conv-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="conv-modal-title">
-    <div class="modal-panel conv-modal-panel">
-        <div class="modal-header">
-            <span id="conv-modal-title">Conversation</span>
-            <button data-action="close-conv-modal" class="close-btn" aria-label="Close">&times;</button>
+        <p id="login-error" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" data-close-dialog>Cancel</button>
+            <button type="submit" id="login-submit" class="btn btn-primary">Sign in</button>
         </div>
-        <div class="modal-body conv-detail" id="conv-modal-body"></div>
-    </div>
-</div>
+    </form>
+</dialog>
 
-<div id="confirm-modal" class="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="confirm-modal-msg">
-    <div class="modal-panel confirm-panel">
-        <div class="modal-body confirm-body">
-            <p id="confirm-modal-msg"></p>
-            <div class="confirm-actions">
-                <button id="confirm-modal-cancel" class="conv-btn conv-btn-neutral">Cancel</button>
-                <button id="confirm-modal-ok" class="conv-btn conv-btn-danger">Delete</button>
-            </div>
+<!-- Source viewer -->
+<dialog id="source-dialog" class="dialog" aria-labelledby="source-dialog-title">
+    <div class="dialog-header">
+        <h2 id="source-dialog-title">Source</h2>
+        <button type="button" class="btn btn-ghost btn-icon" data-close-dialog aria-label="Close">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-width="2" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+    </div>
+    <div class="dialog-body" id="source-dialog-text" tabindex="0"></div>
+</dialog>
+
+<!-- Conversation detail -->
+<dialog id="conv-dialog" class="dialog" aria-labelledby="conv-dialog-title">
+    <div class="dialog-header">
+        <h2 id="conv-dialog-title">Conversation</h2>
+        <button type="button" class="btn btn-ghost btn-icon" data-close-dialog aria-label="Close">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-width="2" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+    </div>
+    <div class="dialog-body conv-detail" id="conv-dialog-body"></div>
+</dialog>
+
+<!-- Confirmation -->
+<dialog id="confirm-dialog" class="dialog dialog-narrow" aria-labelledby="confirm-title" aria-describedby="confirm-msg">
+    <form class="dialog-form" method="dialog">
+        <h2 id="confirm-title">Are you sure?</h2>
+        <p id="confirm-msg"></p>
+        <div class="dialog-actions">
+            <button type="submit" value="cancel" id="confirm-cancel" class="btn btn-secondary" autofocus>Cancel</button>
+            <button type="submit" value="ok" id="confirm-ok" class="btn btn-danger">Delete</button>
         </div>
-    </div>
-</div>
-
-<script src="/static/backend.js?v={{ asset_v }}"></script>
+    </form>
+</dialog>
 </body>
 </html>

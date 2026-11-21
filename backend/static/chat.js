@@ -1,466 +1,413 @@
-const BASE = ''; // Relative path
+// Helios chat page.
+(() => {
+    'use strict';
 
-const BOT_AVATAR_SVG = `<svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <circle cx="12" cy="12" r="4" stroke-width="2"/>
-    <path stroke-linecap="round" stroke-width="2" d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/>
-</svg>`;
+    const { escapeHtml, toast, storage, mobile, openDialog, isApple } = window.Helios;
+    const $ = (id) => document.getElementById(id);
 
-function getThreadId() {
-    let t = localStorage.getItem('chat_thread_id');
-    if (!t) {
-        t = (crypto && crypto.randomUUID) ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
-            : (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
-        localStorage.setItem('chat_thread_id', t);
-    }
-    return t;
-}
+    const THREAD_KEY = 'chat_thread_id';
+    const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+    const MAX_IMAGES = 4;
+    const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+    const HEALTH_POLL_MS = 30_000;
 
-function newConversation() {
-    localStorage.removeItem('chat_thread_id');
-    const history = document.getElementById('chat-history');
-    history.querySelectorAll('.message').forEach(el => el.remove());
-    const hero = document.getElementById('welcome-hero');
-    if (hero) hero.style.display = '';
-    document.getElementById('query-input').focus();
-    if (window.innerWidth <= 768) closeSidebar();
-}
+    const BOT_AVATAR_SVG = '<svg fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">' +
+        '<circle cx="12" cy="12" r="4" stroke-width="2"/>' +
+        '<path stroke-linecap="round" stroke-width="2" d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/></svg>';
+    const CLOCK_SVG = '<svg fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">' +
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
+    const CLOSE_SVG = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-width="2" d="M6 6l12 12M18 6L6 18"/></svg>';
 
-document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        newConversation();
-    }
-});
+    const history = $('chat-history');
+    const thread = $('chat-thread');
+    const input = $('query-input');
+    const sendBtn = $('send-btn');
+    const sidebar = $('sidebar');
+    const backdrop = $('sidebar-backdrop');
+    const menuToggle = $('menu-toggle');
 
-// Init
-checkHealth();
+    let busy = false;
+    let attachments = [];
 
-function setView(view) {
-    document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    // ---------- markdown (marked + DOMPurify) ----------
 
-    document.getElementById('view-' + view).classList.add('active');
-    document.getElementById('nav-' + view).classList.add('active');
-    const mobileNav = document.getElementById('nav-' + view + '-mobile');
-    if (mobileNav) mobileNav.classList.add('active');
+    const SANITIZE = { FORBID_TAGS: ['img', 'style', 'form', 'input', 'button'], ALLOW_DATA_ATTR: false };
 
-    if (view === 'admin') refreshDocs();
-
-    // Always close mobile sidebar after navigation to reveal content
-    if (window.innerWidth <= 768) {
-        closeSidebar();
-    }
-}
-
-function setStatusValue(key, text) {
-    const el = document.querySelector(`[data-status="${key}"]`);
-    if (el) el.textContent = text;
-}
-
-async function checkHealth() {
-    const headerDot = document.getElementById('header-health-dot');
-    const headerText = document.getElementById('header-health-text');
-    const sideDot = document.getElementById('health-dot');
-    try {
-        const res = await fetch(BASE + '/health');
-        const data = await res.json();
-        if (data.demo) {
-            const banner = document.getElementById('demo-banner');
-            if (banner) banner.style.display = 'flex';
-        }
-        const comps = data.components || {};
-        const gemini = (comps.gemini || {}).status === 'healthy';
-        const qdrant = (comps.qdrant || {}).status === 'healthy';
-        setStatusValue('engine', gemini ? 'Gemini · live' : 'simulated');
-        const points = (comps.qdrant || {}).points_count;
-        setStatusValue('qdrant', qdrant ? ('Qdrant' + (points != null ? ` · ${points} pts` : '')) : 'in-memory');
-        const healthy = data.status === 'healthy';
-        setStatusValue('overall', healthy ? 'operational' : 'degraded');
-        const cls = healthy ? 'status-dot ok' : 'status-dot warn';
-        if (headerDot) headerDot.className = cls;
-        if (sideDot) sideDot.className = cls;
-        if (headerText) headerText.textContent = healthy ? 'All systems operational' : 'Degraded';
-    } catch (e) {
-        console.error("Health check failed", e);
-        setStatusValue('overall', 'offline');
-        if (headerDot) headerDot.className = 'status-dot err';
-        if (sideDot) sideDot.className = 'status-dot err';
-        if (headerText) headerText.textContent = 'Unreachable';
-    }
-}
-
-// --- Chat Logic ---
-
-function handleKeyPress(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        doSearch();
-    }
-}
-
-// Auto-grow the composer textarea
-const queryInput = document.getElementById('query-input');
-queryInput.addEventListener('input', () => {
-    queryInput.style.height = 'auto';
-    queryInput.style.height = Math.min(queryInput.scrollHeight, 200) + 'px';
-});
-
-// Chat attachments are image-only. Document ingestion lives in /backend.
-let chatAttachments = [];
-const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
-
-function handleChatFileSelect(e) {
-    const files = Array.from(e.target.files || []);
-    const imageFiles = files.filter(f => IMAGE_EXTS.includes((f.name.split('.').pop() || '').toLowerCase()));
-    if (imageFiles.length !== files.length) {
-        showToast('Document ingestion has moved to the Operations Console. Images can still be attached here for analysis.', false);
-    }
-    chatAttachments = chatAttachments.concat(imageFiles);
-    renderChatAttachments();
-    e.target.value = '';
-}
-
-function renderChatAttachments() {
-    const wrap = document.getElementById('chat-attachments');
-    if (!wrap) return;
-    if (chatAttachments.length === 0) {
-        wrap.hidden = true;
-        wrap.innerHTML = '';
-        return;
-    }
-    wrap.hidden = false;
-    wrap.replaceChildren(...chatAttachments.map((f, idx) => {
-        const ext = (f.name.split('.').pop() || '').toLowerCase();
-        const icon = IMAGE_EXTS.includes(ext) ? '🖼️' : '📄';
-        const chip = document.createElement('span');
-        chip.className = 'chat-attachment-chip';
-        chip.append(`${icon} ${f.name} `);
-        const btn = document.createElement('button');
-        btn.title = 'Remove';
-        btn.textContent = '×';
-        btn.addEventListener('click', () => removeChatAttachment(idx));
-        chip.appendChild(btn);
-        return chip;
-    }));
-}
-
-function removeChatAttachment(idx) {
-    chatAttachments.splice(idx, 1);
-    renderChatAttachments();
-}
-
-function fileToBase64(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            const result = reader.result || '';
-            const comma = String(result).indexOf(',');
-            resolve(comma >= 0 ? String(result).slice(comma + 1) : String(result));
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
-}
-
-function showTyping() {
-    removeTyping();
-    const history = document.getElementById('chat-history');
-    const div = document.createElement('div');
-    div.className = 'message bot';
-    div.id = 'typing-message';
-    div.innerHTML = `
-        <div class="msg-avatar">${BOT_AVATAR_SVG}</div>
-        <div class="msg-main">
-            <div class="message-label">Helios <span class="label-tag">Assistant</span></div>
-            <div class="typing-indicator" aria-label="Helios is thinking"><span></span><span></span><span></span></div>
-        </div>`;
-    history.appendChild(div);
-    history.scrollTop = history.scrollHeight;
-}
-
-function removeTyping() {
-    const el = document.getElementById('typing-message');
-    if (el) el.remove();
-}
-
-async function doSearch() {
-    const input = document.getElementById('query-input');
-    const query = input.value.trim();
-    const hasAttachments = chatAttachments.length > 0;
-    if (!query && !hasAttachments) return;
-
-    const userLabel = hasAttachments
-        ? `${query || '(see attachment)'}  📎 ${chatAttachments.length} file(s)`
-        : query;
-    addMessage('user', userLabel);
-    input.value = '';
-    input.style.height = 'auto';
-
-    const attached = chatAttachments.slice();
-    chatAttachments = [];
-    renderChatAttachments();
-
-    const btn = document.getElementById('send-btn');
-    const icon = document.getElementById('send-icon');
-    const spinner = document.getElementById('send-spinner');
-    btn.disabled = true;
-    icon.style.display = 'none';
-    spinner.style.display = 'inline-block';
-    showTyping();
-
-    try {
-        const imagePayload = [];
-        for (const f of attached) {
-            const ext = (f.name.split('.').pop() || '').toLowerCase();
-            if (IMAGE_EXTS.includes(ext)) {
-                const b64 = await fileToBase64(f);
-                imagePayload.push({ data_base64: b64, mime_type: f.type || `image/${ext === 'jpg' ? 'jpeg' : ext}` });
+    if (window.DOMPurify) {
+        window.DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+            if (node.tagName === 'A' && node.hasAttribute('href')) {
+                node.setAttribute('target', '_blank');
+                node.setAttribute('rel', 'noopener noreferrer');
             }
+        });
+    }
+
+    function renderMarkdown(text) {
+        if (!window.marked || !window.DOMPurify) return escapeHtml(text);
+        try {
+            return window.DOMPurify.sanitize(window.marked.parse(String(text), { breaks: true, gfm: true }), SANITIZE);
+        } catch (err) {
+            console.warn('Markdown rendering failed; showing plain text.', err);
+            return escapeHtml(text);
+        }
+    }
+
+    // ---------- small DOM helpers ----------
+
+    function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+    }
+
+    function scrollToEnd() {
+        history.scrollTop = history.scrollHeight;
+    }
+
+    function getThreadId() {
+        let id = storage.get(THREAD_KEY);
+        if (!id) {
+            id = (window.crypto && crypto.randomUUID)
+                ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+                : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+            storage.set(THREAD_KEY, id);
+        }
+        return id;
+    }
+
+    // ---------- sidebar (off-canvas on small screens) ----------
+
+    function setSidebarOpen(open, { returnFocus = false } = {}) {
+        const isOpen = open && mobile.matches;
+        sidebar.classList.toggle('open', isOpen);
+        backdrop.classList.toggle('show', isOpen);
+        sidebar.inert = mobile.matches && !isOpen;
+        menuToggle.setAttribute('aria-expanded', String(isOpen));
+        menuToggle.setAttribute('aria-label', isOpen ? 'Close menu' : 'Open menu');
+        document.body.classList.toggle('no-scroll', isOpen);
+        if (isOpen) sidebar.querySelector('a, button')?.focus();
+        else if (returnFocus) menuToggle.focus();
+    }
+
+    function sidebarIsOpen() {
+        return sidebar.classList.contains('open');
+    }
+
+    // ---------- health ----------
+
+    function setStatus(key, text) {
+        const node = document.querySelector(`[data-status="${key}"]`);
+        if (node) node.textContent = text;
+    }
+
+    function setHealthState(state, label) {
+        for (const id of ['health-dot', 'header-health-dot']) {
+            const dot = $(id);
+            dot.className = 'dot ' + (state === 'ok' ? 'dot-ok' : state === 'warn' ? 'dot-warn' : 'dot-bad');
+        }
+        $('header-health-text').textContent = label;
+    }
+
+    async function checkHealth() {
+        try {
+            const res = await fetch('/health', { signal: AbortSignal.timeout(8000) });
+            const data = await res.json();
+            const parts = data.components || {};
+            const live = (parts.gemini || {}).status === 'healthy';
+            const qdrant = (parts.qdrant || {}).status === 'healthy';
+            const points = (parts.qdrant || {}).points_count;
+            setStatus('engine', live ? 'Live model' : 'Simulated');
+            setStatus('qdrant', qdrant ? 'Qdrant' + (points != null ? ` · ${points} chunks` : '') : 'In-memory');
+            const healthy = data.status === 'healthy';
+            setStatus('overall', healthy ? 'Operational' : 'Degraded');
+            setHealthState(healthy ? 'ok' : 'warn', healthy ? 'All systems operational' : 'Degraded');
+        } catch (err) {
+            console.warn('Health check failed', err);
+            setStatus('overall', 'Offline');
+            setHealthState('bad', 'Unreachable');
+        }
+    }
+
+    // ---------- attachments (images only; documents are ingested in the console) ----------
+
+    function extOf(name) {
+        return (name.split('.').pop() || '').toLowerCase();
+    }
+
+    function addAttachments(files) {
+        const images = files.filter((f) => IMAGE_TYPES[extOf(f.name)]);
+        if (images.length !== files.length) toast('Only PNG, JPEG and WebP images can be attached.', false);
+        for (const f of images) {
+            if (f.size > MAX_IMAGE_BYTES) { toast(`${f.name} is larger than 4 MB.`, false); continue; }
+            if (attachments.length >= MAX_IMAGES) { toast(`You can attach up to ${MAX_IMAGES} images.`, false); break; }
+            attachments.push(f);
+        }
+        renderAttachments();
+    }
+
+    function renderAttachments() {
+        const wrap = $('chat-attachments');
+        wrap.hidden = attachments.length === 0;
+        wrap.replaceChildren(...attachments.map((file, idx) => {
+            const chip = el('span', 'chat-attachment-chip');
+            chip.setAttribute('role', 'listitem');
+            chip.appendChild(el('span', '', file.name));
+            const remove = el('button');
+            remove.type = 'button';
+            remove.setAttribute('aria-label', `Remove ${file.name}`);
+            remove.innerHTML = CLOSE_SVG;
+            remove.addEventListener('click', () => {
+                attachments.splice(idx, 1);
+                renderAttachments();
+                input.focus();
+            });
+            chip.appendChild(remove);
+            return chip;
+        }));
+    }
+
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const result = String(reader.result || '');
+                const comma = result.indexOf(',');
+                resolve(comma >= 0 ? result.slice(comma + 1) : result);
+            };
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+        });
+    }
+
+    // ---------- messages ----------
+
+    function hideHero() {
+        const hero = $('welcome-hero');
+        if (hero) hero.hidden = true;
+    }
+
+    function showTyping() {
+        removeTyping();
+        const row = el('div', 'message bot');
+        row.id = 'typing-message';
+        const avatar = el('div', 'msg-avatar');
+        avatar.setAttribute('aria-hidden', 'true');
+        avatar.innerHTML = BOT_AVATAR_SVG;
+        const main = el('div', 'msg-main');
+        const indicator = el('div', 'typing-indicator');
+        indicator.setAttribute('role', 'status');
+        indicator.append(el('i'), el('i'), el('i'), el('span', 'sr-only', 'Helios is thinking…'));
+        main.append(el('div', 'message-label', 'Helios'), indicator);
+        row.append(avatar, main);
+        thread.appendChild(row);
+        scrollToEnd();
+    }
+
+    function removeTyping() {
+        $('typing-message')?.remove();
+    }
+
+    function buildResultCard(result, allResults) {
+        const filename = String(result.filename == null ? '' : result.filename);
+        const score = Number(result.score) || 0;
+        const card = el('button', 'result-card');
+        card.type = 'button';
+        card.setAttribute('aria-haspopup', 'dialog');
+        card.setAttribute('aria-label', `Open excerpt from ${filename}, ${(score * 100).toFixed(0)}% match`);
+
+        const header = el('span', 'result-header');
+        const badge = el('span', 'badge ' + (score > 0.8 ? 'badge-success' : score > 0.6 ? 'badge-warning' : ''), `${(score * 100).toFixed(0)}%`);
+        header.append(el('span', '', filename), badge);
+        card.append(header, el('span', 'result-text', result.chunk_text == null ? '' : String(result.chunk_text)));
+        card.addEventListener('click', () => showExcerpts(filename, allResults, card));
+        return card;
+    }
+
+    function addMessage(type, text, { results = null, meta = null, error = false } = {}) {
+        hideHero();
+        const row = el('div', `message ${type}${error ? ' is-error' : ''}`);
+        if (type === 'bot') {
+            const avatar = el('div', 'msg-avatar');
+            avatar.setAttribute('aria-hidden', 'true');
+            avatar.innerHTML = BOT_AVATAR_SVG;
+            row.appendChild(avatar);
         }
 
-        const body = { query: query || 'Please analyze the attached content.', top_k: 10, thread_id: getThreadId() };
-        if (imagePayload.length > 0) body.images = imagePayload;
+        const main = el('div', 'msg-main');
+        main.appendChild(el('div', 'message-label', type === 'user' ? 'You' : 'Helios'));
 
-        const headers = { 'Content-Type': 'application/json' };
+        const bubble = el('div', 'msg-bubble');
+        if (type === 'user' || error) bubble.textContent = text;
+        else bubble.innerHTML = renderMarkdown(text);
+        main.appendChild(bubble);
 
-        const res = await fetch(BASE + '/search', {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(body)
-        });
-        if (res.status === 401) {
+        if (results && results.length > 0) {
+            main.appendChild(el('p', 'results-label', `Sources (${results.length})`));
+            const grid = el('div', 'results-grid');
+            results.forEach((r) => grid.appendChild(buildResultCard(r, results)));
+            main.appendChild(grid);
+        }
+
+        if (type === 'bot' && meta && meta.totalMs != null) {
+            const line = el('div', 'msg-meta');
+            const time = el('span');
+            time.innerHTML = CLOCK_SVG;
+            time.append(`${(meta.totalMs / 1000).toFixed(1)}s`);
+            line.appendChild(time);
+            if (meta.sources) line.append('·', el('span', '', `${meta.sources} source${meta.sources === 1 ? '' : 's'}`));
+            main.appendChild(line);
+        }
+
+        row.appendChild(main);
+        thread.appendChild(row);
+        scrollToEnd();
+        return row;
+    }
+
+    function showExcerpts(filename, results, opener) {
+        const excerpts = (results || []).filter((r) => r.filename === filename).map((r) => r.chunk_text || '');
+        $('doc-dialog-title').textContent = filename;
+        $('doc-dialog-text').textContent = (excerpts.length ? excerpts.join('\n\n---\n\n') : 'No excerpts available for this source.') +
+            '\n\nShowing the retrieved excerpts only. Operators can open the full document in the console.';
+        openDialog($('doc-dialog'), opener);
+    }
+
+    // ---------- sending ----------
+
+    function setBusy(value) {
+        busy = value;
+        sendBtn.disabled = value;
+        sendBtn.setAttribute('aria-busy', String(value));
+        $('send-icon').hidden = value;
+        $('send-spinner').hidden = !value;
+    }
+
+    function failureMessage(status) {
+        if (status === 401 || status === 403) return 'Your session has expired. Reload the page and try again.';
+        if (status === 429) return 'Too many requests right now. Please wait a moment and try again.';
+        if (status === 413) return 'That message or its attachments are too large. Shorten it or remove an image and try again.';
+        return `Something went wrong while searching (error ${status}). Your message is still in the box, so you can try again.`;
+    }
+
+    async function send() {
+        if (busy) return;
+        const query = input.value.trim();
+        if (!query && attachments.length === 0) return;
+
+        const files = attachments.slice();
+        let label = query || '(image attached)';
+        if (files.length) label += `\n[${files.length} image${files.length === 1 ? '' : 's'} attached]`;
+        addMessage('user', label);
+        setBusy(true);
+        showTyping();
+
+        try {
+            const images = [];
+            for (const f of files) {
+                images.push({ data_base64: await fileToBase64(f), mime_type: IMAGE_TYPES[extOf(f.name)] });
+            }
+            const body = { query: query || 'Please analyze the attached content.', top_k: 10, thread_id: getThreadId() };
+            if (images.length) body.images = images;
+
+            const res = await fetch('/search', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(90_000),
+            });
+            const data = await res.json().catch(() => ({}));
             removeTyping();
-            addMessage('bot', 'Søgning kræver et access token. Kontakt ejeren for adgang til den private demo.');
-            return;
+            if (!res.ok) {
+                addMessage('bot', failureMessage(res.status), { error: true });
+                return;
+            }
+            addMessage('bot', data.answer || data.message || 'Here are the most relevant passages I found:', {
+                results: data.results,
+                meta: { totalMs: data.total_ms, sources: (data.sources || []).length },
+            });
+            if (input.value.trim() === query) input.value = '';
+            attachments = [];
+            renderAttachments();
+        } catch (err) {
+            console.warn('Search request failed', err);
+            removeTyping();
+            addMessage('bot', 'Could not reach the assistant. Check your connection; your message is still in the box, so you can try again.', { error: true });
+        } finally {
+            setBusy(false);
+            input.focus();
         }
-        const data = await res.json().catch(() => ({}));
-        removeTyping();
-        if (!res.ok) {
-            addMessage('bot', `Søgning fejlede (${res.status}): ${data.error || 'unknown error'}`);
-            return;
+    }
+
+    function newConversation() {
+        if (busy) { toast('Please wait for the current answer first.', false); return; }
+        storage.remove(THREAD_KEY);
+        thread.querySelectorAll('.message').forEach((node) => node.remove());
+        $('welcome-hero').hidden = false;
+        attachments = [];
+        renderAttachments();
+        input.value = '';
+        setSidebarOpen(false);
+        history.scrollTop = 0;
+        input.focus();
+    }
+
+    // ---------- wiring ----------
+
+    document.addEventListener('click', (e) => {
+        const target = e.target.closest('[data-action], [data-suggestion]');
+        if (!target) return;
+        const { action, suggestion } = target.dataset;
+        if (action === 'toggle-sidebar') setSidebarOpen(!sidebarIsOpen());
+        else if (action === 'new-conversation') newConversation();
+        else if (action === 'attach-image') $('chat-file-input').click();
+        else if (suggestion) {
+            if (busy) return;
+            input.value = suggestion;
+            send();
         }
-        const answer = data.answer || data.message || 'Her er de mest relevante resultater fra dine dokumenter:';
-        addMessage('bot', answer, data.results, {
-            total_ms: data.total_ms,
-            ai_ms: data.ai_ms,
-            sources: (data.sources || []).length
+    });
+
+    input.addEventListener('keydown', (e) => {
+        // Enter sends; Shift+Enter inserts a newline; never send while an IME is composing.
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+            e.preventDefault();
+            send();
+        }
+    });
+
+    // Fallback for browsers without CSS `field-sizing`.
+    if (!(window.CSS && CSS.supports && CSS.supports('field-sizing', 'content'))) {
+        input.addEventListener('input', () => {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 200) + 'px';
         });
-    } catch (e) {
-        removeTyping();
-        addMessage('bot', 'Sorry, an error occurred while searching: ' + e.message);
-    } finally {
-        btn.disabled = false;
-        icon.style.display = 'inline';
-        spinner.style.display = 'none';
-        document.getElementById('query-input').focus();
-    }
-}
-
-function renderBubbleContent(type, text) {
-    // User messages: escape only, keep simple. Bot messages: render Markdown safely.
-    if (!text) return '';
-    if (type === 'user') return escapeHtml(text);
-    try {
-        const html = marked.parse(String(text), { breaks: true, gfm: true });
-        return DOMPurify.sanitize(html);
-    } catch (e) {
-        console.warn('Markdown render failed, falling back to plain text', e);
-        return escapeHtml(text);
-    }
-}
-
-function buildResultCard(r, allResults) {
-    const filename = String(r.filename == null ? '' : r.filename);
-    const score = Number(r.score) || 0;
-    const card = document.createElement('div');
-    card.className = 'result-card';
-    card.dataset.filename = filename;
-    card.addEventListener('click', () => viewDocument(card.dataset.filename, allResults));
-
-    const header = document.createElement('div');
-    header.className = 'result-header';
-    const name = document.createElement('span');
-    name.textContent = filename;
-    const badge = document.createElement('span');
-    badge.className = 'score-badge ' + (score > 0.8 ? 'match-high' : (score > 0.6 ? 'match-med' : ''));
-    badge.textContent = (score * 100).toFixed(0) + '%';
-    header.append(name, badge);
-
-    const text = document.createElement('div');
-    text.className = 'result-text';
-    text.textContent = r.chunk_text == null ? '' : String(r.chunk_text);
-
-    card.append(header, text);
-    return card;
-}
-
-function addMessage(type, text, results = null, meta = null) {
-    // Hide welcome hero on first interaction
-    const hero = document.getElementById('welcome-hero');
-    if (hero) hero.style.display = 'none';
-
-    const history = document.getElementById('chat-history');
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `message ${type}`;
-
-    let contentHtml = `<div class="msg-bubble">${renderBubbleContent(type, text)}</div>`;
-
-    if (results && results.length > 0) {
-        contentHtml += `<div class="results-grid"></div>`;
     }
 
-    if (type === 'bot' && meta && meta.total_ms != null) {
-        const secs = (meta.total_ms / 1000).toFixed(1);
-        const parts = [
-            `<span class="meta-item"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>${secs}s</span>`
-        ];
-        if (meta.sources) parts.push(`<span class="meta-item">${meta.sources} source${meta.sources === 1 ? '' : 's'}</span>`);
-        contentHtml += `<div class="msg-meta">${parts.join('<span>·</span>')}</div>`;
-    }
+    $('chat-file-input').addEventListener('change', (e) => {
+        addAttachments(Array.from(e.target.files || []));
+        e.target.value = '';
+    });
+    sendBtn.addEventListener('click', send);
+    backdrop.addEventListener('click', () => setSidebarOpen(false, { returnFocus: true }));
 
-    const label = type === 'user'
-        ? `<div class="message-label">You</div>`
-        : `<div class="message-label">Helios <span class="label-tag">Assistant</span></div>`;
-    const avatar = type === 'user'
-        ? `<div class="msg-avatar">You</div>`
-        : `<div class="msg-avatar">${BOT_AVATAR_SVG}</div>`;
-
-    msgDiv.innerHTML = `
-        ${avatar}
-        <div class="msg-main">
-            ${label}
-            ${contentHtml}
-        </div>
-    `;
-
-    const grid = msgDiv.querySelector('.results-grid');
-    if (grid && results) {
-        results.forEach(r => grid.appendChild(buildResultCard(r, results)));
-    }
-
-    history.appendChild(msgDiv);
-    history.scrollTop = history.scrollHeight;
-}
-
-function askSuggestion(text) {
-    const input = document.getElementById('query-input');
-    input.value = text;
-    doSearch();
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    return String(text)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-}
-
-function showToast(message, success = true, duration = 4000) {
-    // Remove existing toast
-    const existing = document.getElementById('toast');
-    if (existing) existing.remove();
-
-    const toast = document.createElement('div');
-    toast.id = 'toast';
-    toast.className = `toast ${success ? 'toast-success' : 'toast-error'}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-
-    // Auto-dismiss
-    setTimeout(() => {
-        toast.classList.add('toast-hide');
-        setTimeout(() => toast.remove(), 400);
-    }, duration);
-}
-
-async function viewDocument(filename, results) {
-    // The full-document endpoint is operator-only; the public view shows the
-    // excerpts retrieved for this answer.
-    const excerpts = (results || [])
-        .filter(r => r.filename === filename)
-        .map(r => r.chunk_text || '');
-    const body = excerpts.length
-        ? excerpts.join('\n\n---\n\n')
-        : 'No excerpts available for this source.';
-    openModal(filename, body + '\n\n— Showing retrieved excerpts only. The full document is available to operators.');
-}
-
-function openModal(title, text) {
-    document.getElementById('modal-title').textContent = title;
-    document.getElementById('modal-text').textContent = text;
-    document.getElementById('doc-modal').classList.add('open');
-}
-
-function closeModal() {
-    document.getElementById('doc-modal').classList.remove('open');
-}
-
-// Close modal on backdrop click
-document.getElementById('doc-modal').addEventListener('click', (e) => {
-    if (e.target.id === 'doc-modal') closeModal();
-});
-
-// Mobile sidebar toggle helpers
-function toggleSidebar() {
-    const sb = document.querySelector('.sidebar');
-    const backdrop = document.querySelector('.sidebar-backdrop');
-    if (!sb) return;
-    const isOpen = sb.classList.contains('open');
-
-    if (isOpen) {
-        sb.classList.remove('open');
-        backdrop && backdrop.classList.remove('show');
-    } else {
-        sb.classList.add('open');
-        backdrop && backdrop.classList.add('show');
-        // Prevent body scroll when sidebar is open on mobile
-        if (window.innerWidth <= 768) {
-            document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            newConversation();
+        } else if (e.key === 'Escape' && sidebarIsOpen()) {
+            setSidebarOpen(false, { returnFocus: true });
         }
-    }
-}
+    });
 
-function closeSidebar() {
-    const sb = document.querySelector('.sidebar');
-    const backdrop = document.querySelector('.sidebar-backdrop');
-    if (!sb) return;
-    sb.classList.remove('open');
-    backdrop && backdrop.classList.remove('show');
-    // Re-enable body scroll
-    document.body.style.overflow = '';
-}
+    mobile.addEventListener('change', () => setSidebarOpen(false));
 
-// Close sidebar when clicking backdrop
-document.querySelector('.sidebar-backdrop')?.addEventListener('click', closeSidebar);
+    // ---------- init ----------
 
-// Ensure sidebar is closed when resizing to desktop
-window.addEventListener('resize', () => {
-    if (window.innerWidth > 768) {
-        closeSidebar();
-    }
-});
-
-// Close sidebar on Escape key
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && window.innerWidth <= 768) {
-        closeSidebar();
-    }
-});
-
-// ---- Event wiring (replaces inline on*= attributes) ----
-document.addEventListener('click', (e) => {
-    const el = e.target.closest('[data-action], [data-view], [data-suggestion]');
-    if (!el) return;
-    if (el.dataset.action === 'toggle-sidebar') toggleSidebar();
-    else if (el.dataset.action === 'new-conversation') newConversation();
-    else if (el.dataset.action === 'attach-image') document.getElementById('chat-file-input').click();
-    else if (el.dataset.action === 'close-modal') closeModal();
-    else if (el.dataset.view) setView(el.dataset.view);
-    else if (el.dataset.suggestion) askSuggestion(el.dataset.suggestion);
-});
-queryInput.addEventListener('keypress', handleKeyPress);
-document.getElementById('chat-file-input').addEventListener('change', handleChatFileSelect);
-document.getElementById('send-btn').addEventListener('click', doSearch);
+    $('new-chat-kbd').textContent = isApple ? '⌘K' : 'Ctrl K';
+    setSidebarOpen(false);
+    checkHealth();
+    setInterval(() => { if (!document.hidden) checkHealth(); }, HEALTH_POLL_MS);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkHealth(); });
+})();

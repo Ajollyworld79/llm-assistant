@@ -1,1088 +1,917 @@
-// Backend viewer — polling-based dashboard
-// Public demo actions are read-only; private operator mode can perform guarded writes.
+// Helios Console.
+// Public status panels poll without credentials. Operator features (sources, conversations,
+// uploads, deletes) use an HttpOnly session cookie set by POST /backend/api/session; every
+// request carries X-Requested-With as a CSRF guard. No token is ever stored in the browser.
+(() => {
+    'use strict';
 
-// ---------- top tabs ----------
-function setTab(name) {
-    document.querySelectorAll('.bk-tab').forEach(b => {
-        b.classList.toggle('active', b.dataset.tab === name);
-    });
-    document.querySelectorAll('.bk-tab-panel').forEach(p => {
-        p.hidden = p.id !== ('tab-' + name);
-    });
-    // Charts redraw correctly only when visible — nudge them when the usage tab opens
-    if (name === 'usage') {
-        Object.values(CHARTS).forEach(c => c && c.resize());
+    const { toast, escapeHtml, openDialog, closeDialog } = window.Helios;
+    const $ = (id) => document.getElementById(id);
+
+    const SESSION_URL = '/backend/api/session';
+    const LOCKED = document.body.dataset.readOnly === 'true';
+    const STATE = { authed: false };
+
+    const POLL = { system: 30_000, connections: 5_000, metrics: 5_000, usage: 30_000, retry: 30_000 };
+    const MEMORY_CEILING_MB = 1024;
+    const LATENCY_TARGET_MS = 3000;
+    const CONV_PAGE_SIZE = 50;
+
+    const canMutate = () => !LOCKED && STATE.authed;
+    const num = (n) => Number(n || 0).toLocaleString('en-GB');
+
+    // ---------- tiny DOM helper ----------
+
+    function h(tag, props, ...children) {
+        const node = document.createElement(tag);
+        for (const [key, value] of Object.entries(props || {})) {
+            if (value === null || value === undefined || value === false) continue;
+            if (key === 'class') node.className = value;
+            else if (key === 'text') node.textContent = value;
+            else if (key === 'on') for (const [evt, fn] of Object.entries(value)) node.addEventListener(evt, fn);
+            else node.setAttribute(key, value === true ? '' : value);
+        }
+        for (const child of children.flat()) {
+            if (child === null || child === undefined || child === false) continue;
+            node.append(child);
+        }
+        return node;
     }
-    if (name === 'sources') {
-        refreshSources();
+
+    function setText(id, value) {
+        const node = $(id);
+        if (node) node.textContent = value === undefined || value === null ? '—' : String(value);
     }
-    if (name === 'conversations') {
-        refreshConversations();
+
+    function truncate(value, max) {
+        const s = String(value == null ? '' : value);
+        return s.length > max ? s.slice(0, max) + '…' : s;
     }
-}
 
-function getAdminToken() {
-    return localStorage.getItem('admin_token') || '';
-}
+    // ---------- date formatting ----------
 
-function authHeaders() {
-    const t = getAdminToken();
-    return t ? { 'Authorization': 'Bearer ' + t } : {};
-}
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const pad2 = (n) => String(n).padStart(2, '0');
 
-function isReadOnlyDemo() {
-    return document.body.dataset.readOnly === 'true';
-}
+    function fmtDateTime(iso, compact) {
+        if (iso === null || iso === undefined || iso === '') return '—';
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return String(iso);
+        const day = `${pad2(d.getDate())} ${MONTHS[d.getMonth()]}`;
+        const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+        if (compact) return `${day} ${hm}`;
+        return `${day} ${d.getFullYear()} ${hm}:${pad2(d.getSeconds())}`;
+    }
 
-function escapeHtml(s) {
-    return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
+    const fmtShort = (iso) => fmtDateTime(iso, true);
 
-function truncate(s, n) {
-    s = String(s == null ? '' : s);
-    return s.length > n ? s.slice(0, n) + '…' : s;
-}
+    function humanSeconds(s) {
+        s = Number(s) || 0;
+        if (s < 60) return `${s | 0}s`;
+        if (s < 3600) return `${(s / 60) | 0}m`;
+        if (s < 86400) return `${(s / 3600) | 0}h ${((s % 3600) / 60) | 0}m`;
+        return `${(s / 86400) | 0}d`;
+    }
 
-// ---------- date/time formatting (single formatter) ----------
+    // ---------- API + operator session ----------
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const _pad2 = n => String(n).padStart(2, '0');
+    async function api(path, { method = 'GET', body, headers, timeout = 20_000 } = {}) {
+        const res = await fetch(path, {
+            method,
+            body,
+            credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'helios', ...headers },
+            signal: AbortSignal.timeout(timeout),
+        });
+        if (res.status === 401) setAuth(false);
+        return res;
+    }
 
-// "08 Nov 2026 14:32:05 CET" in the browser's local time. compact -> "08 Nov 14:32".
-function fmtDateTime(iso, opts) {
-    if (iso === null || iso === undefined || iso === '') return '—';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return String(iso);
-    const day = `${_pad2(d.getDate())} ${MONTHS[d.getMonth()]}`;
-    if (opts && opts.compact) return `${day} ${_pad2(d.getHours())}:${_pad2(d.getMinutes())}`;
-    let tz = '';
-    try {
-        const part = new Intl.DateTimeFormat('en-GB', { timeZoneName: 'short' })
-            .formatToParts(d).find(x => x.type === 'timeZoneName');
-        tz = part ? ' ' + part.value : '';
-    } catch (_) { /* tz name is optional */ }
-    return `${day} ${d.getFullYear()} ${_pad2(d.getHours())}:${_pad2(d.getMinutes())}:${_pad2(d.getSeconds())}${tz}`;
-}
+    async function jget(path) {
+        const res = await api(path);
+        if (!res.ok) throw new Error(`${path}: ${res.status}`);
+        return res.json();
+    }
 
-function fmtShort(iso) {
-    return fmtDateTime(iso, { compact: true });
-}
-
-// ---------- small DOM helpers ----------
-
-function h(tag, props, ...children) {
-    const el = document.createElement(tag);
-    if (props) {
-        for (const [k, v] of Object.entries(props)) {
-            if (v === null || v === undefined || v === false) continue;
-            if (k === 'class') el.className = v;
-            else if (k === 'text') el.textContent = v;
-            else if (k === 'dataset') Object.assign(el.dataset, v);
-            else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-            else el.setAttribute(k, v === true ? '' : v);
+    function setAuth(value) {
+        if (STATE.authed === value) return;
+        STATE.authed = value;
+        document.body.dataset.auth = String(value);
+        if (value) {
+            refreshSources();
+            refreshConversations();
+        } else {
+            showSourcesSignedOut();
+            CONV.items = [];
+            CONV.next = null;
+            CONV.error = 'unauthorized';
+            renderConversations();
         }
     }
-    children.flat().forEach(c => {
-        if (c === null || c === undefined || c === false) return;
-        el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
-    });
-    return el;
-}
 
-function messageRow(colspan, text, isError) {
-    return h('tr', null, h('td', { colspan: String(colspan), class: 'conv-empty' + (isError ? ' conv-empty-error' : ''), text }));
-}
-
-async function copyText(text, label) {
-    try {
-        await navigator.clipboard.writeText(text);
-        showToast(`${label} copied.`);
-    } catch (_) {
-        const ta = h('textarea', { style: 'position:fixed;opacity:0' });
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        let ok = false;
-        try { ok = document.execCommand('copy'); } catch (__) { ok = false; }
-        ta.remove();
-        showToast(ok ? `${label} copied.` : 'Copy failed.', ok);
+    async function checkSession() {
+        try {
+            const res = await fetch(SESSION_URL, { credentials: 'same-origin', headers: { 'X-Requested-With': 'helios' }, signal: AbortSignal.timeout(8000) });
+            const data = res.ok ? await res.json() : {};
+            setAuth(Boolean(data.authenticated));
+        } catch (err) {
+            console.warn('Session check failed', err);
+            setAuth(false);
+        }
     }
-}
 
-// Promise-based confirm dialog (replaces window.confirm).
-function confirmDialog(message, okLabel) {
-    const modal = document.getElementById('confirm-modal');
-    const ok = document.getElementById('confirm-modal-ok');
-    const cancel = document.getElementById('confirm-modal-cancel');
-    if (!modal || !ok || !cancel) return Promise.resolve(false);
-    document.getElementById('confirm-modal-msg').textContent = message;
-    ok.textContent = okLabel || 'Delete';
-    modal.classList.add('open');
-    cancel.focus();
-    return new Promise(resolve => {
-        const done = (val) => {
-            modal.classList.remove('open');
-            ok.removeEventListener('click', onOk);
-            cancel.removeEventListener('click', onCancel);
-            modal.removeEventListener('click', onBackdrop);
-            document.removeEventListener('keydown', onKey, true);
-            resolve(val);
-        };
-        const onOk = () => done(true);
-        const onCancel = () => done(false);
-        const onBackdrop = (e) => { if (e.target === modal) done(false); };
-        const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
-        ok.addEventListener('click', onOk);
-        cancel.addEventListener('click', onCancel);
-        modal.addEventListener('click', onBackdrop);
-        document.addEventListener('keydown', onKey, true);
-    });
-}
-
-// ---------- conversations ----------
-
-const CONV_PAGE_SIZE = 50;
-const CONV = { items: [], total: 0, next: null, q: '', seq: 0, loading: false, error: null };
-
-function canDelete() {
-    return !isReadOnlyDemo() && Boolean(getAdminToken());
-}
-
-function updateConvChrome() {
-    const note = document.getElementById('conv-auth-note');
-    if (note) {
-        note.textContent = isReadOnlyDemo()
-            ? 'Read-only demo: deletion is disabled.'
-            : (getAdminToken() ? 'Operator token saved — delete actions enabled.' : 'No operator token saved.');
+    function openLogin(opener) {
+        const error = $('login-error');
+        error.hidden = true;
+        $('login-token').value = '';
+        openDialog($('login-dialog'), opener);
     }
-    const clear = document.getElementById('conv-clear-btn');
-    if (clear) clear.hidden = !canDelete();
-    const more = document.getElementById('conv-more-btn');
-    if (more) {
+
+    async function submitLogin(e) {
+        e.preventDefault();
+        const input = $('login-token');
+        const error = $('login-error');
+        const submit = $('login-submit');
+        const fail = (message) => { error.textContent = message; error.hidden = false; input.focus(); };
+        if (!input.value) { fail('Enter the operator token.'); return; }
+        error.hidden = true;
+        submit.disabled = true;
+        try {
+            const res = await fetch(SESSION_URL, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'helios' },
+                body: JSON.stringify({ token: input.value }),
+                signal: AbortSignal.timeout(15_000),
+            });
+            if (res.ok) {
+                input.value = '';
+                closeDialog($('login-dialog'));
+                setAuth(true);
+                toast('Signed in as operator.');
+            } else if (res.status === 401) {
+                fail('That token was not accepted.');
+            } else if (res.status === 429) {
+                fail('Too many attempts. Wait a moment and try again.');
+            } else {
+                fail(`Sign-in failed (error ${res.status}).`);
+            }
+        } catch (err) {
+            console.warn('Sign-in failed', err);
+            fail('Could not reach the server. Try again.');
+        } finally {
+            submit.disabled = false;
+        }
+    }
+
+    async function logout() {
+        try {
+            await fetch(SESSION_URL, { method: 'DELETE', credentials: 'same-origin', headers: { 'X-Requested-With': 'helios' }, signal: AbortSignal.timeout(8000) });
+        } catch (err) {
+            console.warn('Sign-out request failed', err);
+        }
+        setAuth(false);
+        toast('Signed out.');
+    }
+
+    // ---------- shared UI pieces ----------
+
+    function noteRow(colspan, text, { error = false, signIn = false } = {}) {
+        const cell = h('td', { colspan: String(colspan), class: 'table-note' + (error ? ' table-note-error' : '') }, text);
+        if (signIn) {
+            cell.append(h('button', { type: 'button', class: 'btn btn-primary btn-sm', text: 'Sign in', on: { click: (e) => openLogin(e.currentTarget) } }));
+        }
+        return h('tr', null, cell);
+    }
+
+    async function copyText(text, label) {
+        try {
+            await navigator.clipboard.writeText(text);
+            toast(`${label} copied.`);
+        } catch (_) {
+            const area = h('textarea', { class: 'sr-only', 'aria-hidden': 'true', tabindex: '-1' });
+            area.value = text;
+            document.body.appendChild(area);
+            area.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (__) { ok = false; }
+            area.remove();
+            toast(ok ? `${label} copied.` : 'Copy failed.', ok);
+        }
+    }
+
+    // Promise-based confirmation in a native dialog. Cancel is the default focus.
+    function confirmDialog(message, okLabel = 'Delete', title = 'Are you sure?') {
+        const dialog = $('confirm-dialog');
+        $('confirm-title').textContent = title;
+        $('confirm-msg').textContent = message;
+        $('confirm-ok').textContent = okLabel;
+        dialog.returnValue = ''; // Escape/backdrop close must read as "cancel"
+        openDialog(dialog);
+        return new Promise((resolve) => {
+            dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
+        });
+    }
+
+    // ---------- tabs ----------
+
+    const TAB_NAMES = ['overview', 'sources', 'models', 'prompt', 'usage', 'conversations'];
+
+    function setTab(name, { focus = false } = {}) {
+        for (const tab of document.querySelectorAll('.bk-tab')) {
+            const selected = tab.dataset.tab === name;
+            tab.setAttribute('aria-selected', String(selected));
+            tab.tabIndex = selected ? 0 : -1;
+            if (selected && focus) tab.focus();
+        }
+        for (const panel of document.querySelectorAll('.bk-tab-panel')) panel.hidden = panel.id !== `tab-${name}`;
+        if (name === 'usage') Object.values(CHARTS).forEach((c) => c && c.resize());
+        if (name === 'sources' && STATE.authed) refreshSources();
+        if (name === 'conversations' && STATE.authed) refreshConversations();
+    }
+
+    function onTabKeydown(e) {
+        const tab = e.target.closest('.bk-tab');
+        if (!tab) return;
+        const idx = TAB_NAMES.indexOf(tab.dataset.tab);
+        let next = idx;
+        if (e.key === 'ArrowRight') next = (idx + 1) % TAB_NAMES.length;
+        else if (e.key === 'ArrowLeft') next = (idx - 1 + TAB_NAMES.length) % TAB_NAMES.length;
+        else if (e.key === 'Home') next = 0;
+        else if (e.key === 'End') next = TAB_NAMES.length - 1;
+        else return;
+        e.preventDefault();
+        setTab(TAB_NAMES[next], { focus: true });
+    }
+
+    // ---------- conversations ----------
+
+    const CONV = { items: [], total: 0, next: null, q: '', seq: 0, loading: false, error: 'unauthorized' };
+
+    function updateConvChrome() {
+        const more = $('conv-more-btn');
         more.hidden = CONV.next === null || CONV.error !== null;
         more.disabled = CONV.loading;
+        $('conv-count').textContent = CONV.error ? '' : `Showing ${CONV.items.length} of ${CONV.total}`;
     }
-    const count = document.getElementById('conv-count');
-    if (count) count.textContent = CONV.error ? '' : `Showing ${CONV.items.length} of ${CONV.total}`;
-}
 
-function renderConversations() {
-    const tbody = document.getElementById('conv-tbody');
-    if (!tbody) return;
-    tbody.replaceChildren();
-    if (CONV.error === 'unauthorized') {
-        const msg = isReadOnlyDemo()
-            ? 'Operator access required — conversations are not available in the read-only demo.'
-            : (getAdminToken()
-                ? 'Operator token rejected — re-save it under Sources.'
-                : 'Operator token required — save it under Sources');
-        tbody.appendChild(messageRow(9, msg, false));
-    } else if (CONV.error === 'unavailable') {
-        tbody.appendChild(messageRow(9, 'Conversation store unavailable', true));
-    } else if (CONV.error) {
-        tbody.appendChild(messageRow(9, 'Failed to load conversations: ' + CONV.error, true));
-    } else if (CONV.items.length === 0) {
-        tbody.appendChild(messageRow(9, CONV.loading ? 'Loading…'
-            : (CONV.q ? 'No conversations match your search.' : 'No conversations yet.'), false));
-    } else {
-        const showDelete = canDelete();
-        CONV.items.forEach(r => tbody.appendChild(convRow(r, showDelete)));
-    }
-    updateConvChrome();
-}
-
-function convRow(r, showDelete) {
-    const tr = h('tr', { class: 'conv-row', tabindex: '0', role: 'button', 'aria-label': 'Open conversation details' });
-    const tIn = r.tokens_input | 0, tOut = r.tokens_output | 0;
-    tr.append(
-        h('td', { class: 'conv-date', title: r.ts || '', text: fmtDateTime(r.ts) }),
-        h('td', { class: 'mono', title: r.thread_id || '', text: (r.thread_id || '').slice(0, 8) || '—' }),
-        h('td', { title: truncate(r.query, 400), text: truncate(r.query, 120) }),
-        h('td', { title: truncate(r.answer, 400), text: truncate(r.answer, 160) }),
-        h('td', { class: 'num', text: `${r.total_ms | 0} ms` }),
-        h('td', { class: 'num', text: `${tIn.toLocaleString('en-GB')} / ${tOut.toLocaleString('en-GB')}` }),
-        h('td', { class: 'num', text: String(r.doc_count | 0) }),
-        h('td', { text: r.model || '—' }),
-    );
-    const actions = h('td');
-    if (showDelete) {
-        actions.appendChild(h('button', {
-            class: 'conv-del', title: 'Delete conversation', 'aria-label': 'Delete conversation',
-            text: '×',
-            onclick: (e) => { e.stopPropagation(); deleteConversation(r.id); },
-        }));
-    } else if (isReadOnlyDemo()) {
-        actions.appendChild(h('span', { class: 'conv-readonly', text: 'locked' }));
-    }
-    tr.appendChild(actions);
-    tr.addEventListener('click', () => openConvModal(r));
-    tr.addEventListener('keydown', (e) => {
-        if (e.target === tr && (e.key === 'Enter' || e.key === ' ')) {
-            e.preventDefault();
-            openConvModal(r);
+    function renderConversations() {
+        const tbody = $('conv-tbody');
+        tbody.replaceChildren();
+        if (CONV.error === 'unauthorized') {
+            tbody.appendChild(noteRow(9, 'Sign in as operator to read conversations.', { signIn: true }));
+        } else if (CONV.error === 'unavailable') {
+            tbody.appendChild(noteRow(9, 'The conversation store is unavailable.', { error: true }));
+        } else if (CONV.error) {
+            tbody.appendChild(noteRow(9, `Could not load conversations (${CONV.error}).`, { error: true }));
+        } else if (CONV.items.length === 0) {
+            tbody.appendChild(noteRow(9, CONV.loading ? 'Loading…' : (CONV.q ? 'No conversations match your search.' : 'No conversations yet.')));
+        } else {
+            const showDelete = canMutate();
+            CONV.items.forEach((r) => tbody.appendChild(convRow(r, showDelete)));
         }
-    });
-    return tr;
-}
-
-async function fetchConversationsPage(beforeId) {
-    const params = new URLSearchParams({ limit: String(CONV_PAGE_SIZE) });
-    if (beforeId !== null && beforeId !== undefined) params.set('before_id', String(beforeId));
-    if (CONV.q) params.set('q', CONV.q);
-    const r = await fetch('/backend/api/conversations?' + params.toString(), {
-        credentials: 'same-origin',
-        headers: authHeaders(),
-    });
-    if (r.status === 401) return { error: 'unauthorized' };
-    if (r.status === 500) return { error: 'unavailable' };
-    if (!r.ok) return { error: 'HTTP ' + r.status };
-    return { data: await r.json() };
-}
-
-async function loadConversations(append) {
-    const seq = ++CONV.seq;
-    CONV.loading = true;
-    if (!append) {
-        CONV.items = [];
-        CONV.next = null;
-        CONV.error = null;
+        updateConvChrome();
     }
-    renderConversations();
-    let res;
-    try {
-        res = await fetchConversationsPage(append ? CONV.next : null);
-    } catch (e) {
-        res = { error: e.message || 'network error' };
-    }
-    if (seq !== CONV.seq) return; // a newer request superseded this one
-    CONV.loading = false;
-    if (res.error) {
-        CONV.error = res.error;
-        CONV.items = [];
-        CONV.next = null;
-        CONV.total = 0;
-    } else {
-        CONV.error = null;
-        const data = res.data;
-        setText('conv-backend', data.backend || '—');
-        CONV.items = append ? CONV.items.concat(data.items || []) : (data.items || []);
-        CONV.total = data.total | 0;
-        CONV.next = data.next_before_id === undefined ? null : data.next_before_id;
-    }
-    renderConversations();
-}
 
-function refreshConversations() {
-    const input = document.getElementById('conv-search');
-    CONV.q = input ? input.value.trim() : '';
-    return loadConversations(false);
-}
-
-function loadMoreConversations() {
-    if (CONV.next === null || CONV.loading) return;
-    return loadConversations(true);
-}
-
-let _convSearchTimer = null;
-function initConversationControls() {
-    const input = document.getElementById('conv-search');
-    if (input) {
-        input.addEventListener('input', () => {
-            clearTimeout(_convSearchTimer);
-            _convSearchTimer = setTimeout(refreshConversations, 300);
-        });
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                clearTimeout(_convSearchTimer);
-                refreshConversations();
-            }
-        });
-    }
-    const modal = document.getElementById('conv-modal');
-    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) closeConvModal(); });
-    document.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') return;
-        if (modal && modal.classList.contains('open')) closeConvModal();
-        else closeSourceModal();
-    });
-}
-
-function openConvModal(r) {
-    const body = document.getElementById('conv-modal-body');
-    const modal = document.getElementById('conv-modal');
-    if (!body || !modal) return;
-    body.replaceChildren();
-    document.getElementById('conv-modal-title').textContent = `Conversation #${r.id ?? ''}`;
-
-    const meta = (label, value) => h('div', null, h('dt', { text: label }), h('dd', null, value));
-    const threadValue = r.thread_id
-        ? h('button', {
-            class: 'conv-thread-link', title: 'Filter conversations by this thread', text: r.thread_id,
-            onclick: () => {
-                const input = document.getElementById('conv-search');
-                if (input) input.value = r.thread_id;
-                closeConvModal();
-                refreshConversations();
-            },
-        })
-        : '—';
-    body.appendChild(h('dl', { class: 'conv-detail-meta' },
-        meta('Time', fmtDateTime(r.ts)),
-        meta('ISO', r.ts || '—'),
-        meta('Thread', threadValue),
-        meta('Model', r.model || '—'),
-        meta('Embed', `${r.embed_ms | 0} ms`),
-        meta('AI', `${r.ai_ms | 0} ms`),
-        meta('Total', `${r.total_ms | 0} ms`),
-        meta('Tokens in / out', `${(r.tokens_input | 0).toLocaleString('en-GB')} / ${(r.tokens_output | 0).toLocaleString('en-GB')}`),
-        meta('Docs', String(r.doc_count | 0)),
-    ));
-    const block = (title, text, label) => h('section', { class: 'conv-detail-block' },
-        h('h4', null, title, h('button', {
-            class: 'conv-btn conv-btn-neutral conv-btn-sm', text: 'Copy',
-            onclick: () => copyText(text, label),
-        })),
-        h('pre', { class: 'conv-detail-text', text: text || '—' }));
-    body.appendChild(block('Question', r.query || '', 'Question'));
-    body.appendChild(block('Answer', r.answer || '', 'Answer'));
-    modal.classList.add('open');
-    modal.querySelector('.close-btn')?.focus();
-}
-
-function closeConvModal() {
-    document.getElementById('conv-modal')?.classList.remove('open');
-}
-
-async function deleteConversation(id) {
-    if (isReadOnlyDemo()) {
-        showToast('Read-only demo: conversation deletion is disabled.', false);
-        return;
-    }
-    if (!getAdminToken()) {
-        showToast('Operator token required — save it under Sources.', false);
-        return;
-    }
-    if (!await confirmDialog(`Delete conversation #${id}?`)) return;
-    try {
-        const r = await fetch('/backend/api/conversations/' + encodeURIComponent(id), {
-            method: 'DELETE',
-            headers: authHeaders(),
-            credentials: 'same-origin',
-        });
-        if (r.status === 401) { showToast('Unauthorized — check the operator token.', false); return; }
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        showToast('Conversation deleted.');
-        refreshConversations();
-    } catch (e) {
-        showToast('Delete failed: ' + e.message, false);
-    }
-}
-
-async function clearAllConversations() {
-    if (isReadOnlyDemo()) {
-        showToast('Read-only demo: conversation deletion is disabled.', false);
-        return;
-    }
-    if (!getAdminToken()) {
-        showToast('Operator token required — save it under Sources.', false);
-        return;
-    }
-    if (!await confirmDialog('Delete ALL conversations? This cannot be undone.', 'Delete all')) return;
-    try {
-        const r = await fetch('/backend/api/conversations', {
-            method: 'DELETE',
-            headers: authHeaders(),
-            credentials: 'same-origin',
-        });
-        if (r.status === 401) { showToast('Unauthorized — check the operator token.', false); return; }
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const data = await r.json().catch(() => ({}));
-        showToast(`Deleted ${data.deleted ?? 0} conversation(s).`);
-        refreshConversations();
-    } catch (e) {
-        showToast('Clear failed: ' + e.message, false);
-    }
-}
-const SYS_POLL_MS = 30_000;
-const METRICS_POLL_MS = 5_000;
-const CONN_POLL_MS = 5_000;
-const USAGE_POLL_MS = 30_000;
-
-let SYSTEM_STATE = null;
-let PROMPT_STATE = null;
-let MODELS_STATE = null;
-let SOURCE_FILES = [];
-const CHARTS = {};
-
-// ---------- shared helpers ----------
-function setText(id, value) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = value === undefined || value === null ? '—' : String(value);
-}
-
-function clampPct(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    return Math.max(0, Math.min(100, n));
-}
-
-function setWidth(id, pct) {
-    const el = document.getElementById(id);
-    if (el) el.style.width = `${clampPct(pct)}%`;
-}
-
-function setSparkHeight(id, pct) {
-    const el = document.getElementById(id);
-    if (el) el.style.height = `${Math.max(10, clampPct(pct))}%`;
-}
-
-function setRing(id, pct) {
-    const el = document.getElementById(id);
-    const ring = el?.parentElement;
-    if (ring) ring.style.setProperty('--budget-deg', `${clampPct(pct) * 3.6}deg`);
-}
-
-function showToast(message, success = true, duration = 4000) {
-    const existing = document.getElementById('toast');
-    if (existing) existing.remove();
-    const toast = document.createElement('div');
-    toast.id = 'toast';
-    toast.className = `toast ${success ? 'toast-success' : 'toast-error'}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => {
-        toast.classList.add('toast-hide');
-        setTimeout(() => toast.remove(), 400);
-    }, duration);
-}
-
-function setDot(id, color) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('tile-dot-green', 'tile-dot-yellow', 'tile-dot-amber', 'tile-dot-red');
-    if (color) el.classList.add(`tile-dot-${color === 'yellow' ? 'amber' : color}`);
-}
-
-async function jget(path) {
-    const r = await fetch(path, { credentials: 'same-origin' });
-    if (!r.ok) throw new Error(`${path}: ${r.status}`);
-    return r.json();
-}
-
-function humanSeconds(s) {
-    if (!s || s < 60) return `${s|0}s`;
-    if (s < 3600) return `${(s/60)|0}m`;
-    if (s < 86400) return `${(s/3600)|0}h ${((s%3600)/60)|0}m`;
-    return `${(s/86400)|0}d`;
-}
-
-// ---------- pollers ----------
-
-async function pollSystem() {
-    const s = await jget('/backend/api/system');
-    SYSTEM_STATE = s;
-    setText('tile-primary-model', s.model_primary);
-    setText('tile-fallback-model', s.model_fallback);
-    setText('tile-embed-model', s.embedding_model);
-    setText('tile-embed-dim', `${s.embedding_provider} · ${s.embedding_dim} dim`);
-    setText('tile-region', s.llm_provider);
-    setText('tile-git-sha', s.git_sha);
-    setText('tile-uptime', `uptime ${humanSeconds(s.uptime_seconds)}`);
-    setText('runtime-provider', s.llm_provider);
-    setText('runtime-embed', truncate(s.embedding_model, 28));
-    setText('runtime-primary', truncate(s.model_primary, 28));
-    document.getElementById('config-pre').textContent = JSON.stringify(s.config, null, 2);
-}
-
-async function pollConnections() {
-    const c = await jget('/backend/api/connections');
-    const okStatuses = {
-        qdrant: ['up'],
-        gemini: ['up'],
-        embedding_model: ['loaded', 'configured'],
-        logger: ['writing', 'stdout_only'],
-        usage_db: ['up', 'memory_fallback'],
-        chat_db: ['up', 'memory_fallback'],
-    };
-    const labels = {
-        chat_db: 'Chat DB',
-        usage_db: 'Usage DB',
-        embedding_model: 'Embedding',
-    };
-    Object.entries(c).forEach(([key, val]) => {
-        const span = document.querySelector(`[data-conn="${key}"]`);
-        if (!span) return;
-        const accepted = okStatuses[key] || ['up'];
-        const good = accepted.includes(val.status);
-        const dot = good ? '🟢' : '🔴';
-        const label = labels[key] || key.replace(/_/g, ' ');
-        const suffix = (key === 'chat_db' && val.count != null) ? ` (${val.count})` : '';
-        span.textContent = `${dot} ${label}${suffix}`;
-    });
-    // Tile dots
-    setDot('tile-qdrant-dot', c.qdrant?.status === 'up' ? 'green' : 'red');
-    const qdrantPoints = c.qdrant?.points_count;
-    const qdrantLabel = typeof qdrantPoints === 'number' ? qdrantPoints.toLocaleString('en-GB') : (qdrantPoints ?? '—');
-    setText('tile-qdrant-points', qdrantLabel);
-    setText('runtime-qdrant-points', qdrantLabel);
-    setDot('tile-embed-dot', ['loaded', 'configured'].includes(c.embedding_model?.status) ? 'green' : 'yellow');
-    const geminiColor = c.gemini?.status === 'up' ? 'green' : (c.gemini?.status === 'unconfigured' ? 'yellow' : 'red');
-    setDot('tile-primary-dot', geminiColor);
-    setDot('tile-fallback-dot', geminiColor);
-}
-
-// ---------- RAG source library ----------
-
-function initSourceControls() {
-    const tokenInput = document.getElementById('operator-token-input');
-    if (tokenInput) tokenInput.value = getAdminToken();
-
-    const dropZone = document.getElementById('source-drop-zone');
-    if (!dropZone) return;
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.classList.add('dragover');
-    });
-    dropZone.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('dragover');
-    });
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('dragover');
-        if (e.dataTransfer.files) {
-            addSourcesToQueue(Array.from(e.dataTransfer.files));
+    function convRow(r, showDelete) {
+        const tr = h('tr');
+        const open = (opener) => openConvDialog(r, opener);
+        tr.append(
+            h('td', { class: 'conv-time', title: r.ts || '' },
+                h('button', { type: 'button', class: 'link-btn', text: fmtShort(r.ts), 'aria-label': `Open conversation ${r.id ?? ''} from ${fmtDateTime(r.ts)}`, on: { click: (e) => open(e.currentTarget) } })),
+            h('td', { class: 'mono col-opt-sm', title: r.thread_id || '', text: (r.thread_id || '').slice(0, 8) || '—' }),
+            h('td', { title: truncate(r.query, 400), text: truncate(r.query, 120) }),
+            h('td', { class: 'col-opt', title: truncate(r.answer, 400), text: truncate(r.answer, 160) }),
+            h('td', { class: 'num col-opt-sm', text: `${r.total_ms | 0} ms` }),
+            h('td', { class: 'num col-opt', text: `${num(r.tokens_input)} / ${num(r.tokens_output)}` }),
+            h('td', { class: 'num col-opt', text: String(r.doc_count | 0) }),
+            h('td', { class: 'col-opt', text: r.model || '—' }),
+        );
+        const actions = h('td', { class: 'actions-cell' });
+        if (showDelete) {
+            actions.appendChild(h('button', {
+                type: 'button', class: 'btn btn-danger btn-sm', text: 'Delete',
+                'aria-label': `Delete conversation ${r.id ?? ''}`,
+                on: { click: () => deleteConversation(r.id) },
+            }));
         }
-    });
-}
-
-function saveOperatorToken() {
-    const input = document.getElementById('operator-token-input');
-    if (!input) {
-        showToast('Operator token is hidden in the read-only demo.', false);
-        return;
+        tr.appendChild(actions);
+        return tr;
     }
-    localStorage.setItem('admin_token', input.value.trim());
-    showToast('Operator token saved.');
-    refreshSources();
-    refreshConversations();
-}
 
-function handleSourceFileSelect(e) {
-    addSourcesToQueue(Array.from(e.target.files || []));
-    e.target.value = '';
-}
+    async function fetchConversationsPage(beforeId) {
+        const params = new URLSearchParams({ limit: String(CONV_PAGE_SIZE) });
+        if (beforeId !== null && beforeId !== undefined) params.set('before_id', String(beforeId));
+        if (CONV.q) params.set('q', CONV.q);
+        const res = await api('/backend/api/conversations?' + params);
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (res.status === 500) return { error: 'unavailable' };
+        if (!res.ok) return { error: `error ${res.status}` };
+        return { data: await res.json() };
+    }
 
-function addSourcesToQueue(files) {
-    SOURCE_FILES = files;
-    const list = document.getElementById('source-file-list');
-    const queue = document.getElementById('source-upload-queue');
-    if (!list || !queue) return;
-    list.innerHTML = files.map(f => `<div>${escapeHtml(f.name)} (${(f.size / 1024).toFixed(1)} KB)</div>`).join('');
-    queue.hidden = files.length === 0;
-}
-
-async function uploadSources() {
-    if (isReadOnlyDemo()) {
-        showToast('Upload is disabled in the read-only demo.', false);
-        return;
-    }
-    if (SOURCE_FILES.length === 0) return;
-    const token = getAdminToken();
-    if (!token) {
-        showToast('Private operator token required to upload sources.', false);
-        return;
-    }
-    const btn = document.getElementById('source-upload-btn');
-    const progress = document.getElementById('source-upload-progress');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Uploading...';
-    }
-    const errors = [];
-    for (let i = 0; i < SOURCE_FILES.length; i++) {
-        const file = SOURCE_FILES[i];
-        if (progress) progress.textContent = `Uploading ${i + 1}/${SOURCE_FILES.length}: ${file.name}`;
-        const fd = new FormData();
-        fd.append('file', file);
+    async function loadConversations(append) {
+        if (!STATE.authed) return;
+        const seq = ++CONV.seq;
+        CONV.loading = true;
+        if (!append) { CONV.items = []; CONV.next = null; CONV.error = null; }
+        renderConversations();
+        let res;
         try {
-            const res = await fetch('/upload', { method: 'POST', body: fd, headers: authHeaders() });
-            if (res.status === 401) throw new Error('Unauthorized');
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        } catch (e) {
-            errors.push(`${file.name}: ${e.message}`);
+            res = await fetchConversationsPage(append ? CONV.next : null);
+        } catch (err) {
+            console.warn('Loading conversations failed', err);
+            res = { error: 'network error' };
+        }
+        if (seq !== CONV.seq) return; // superseded by a newer request
+        CONV.loading = false;
+        if (res.error) {
+            Object.assign(CONV, { error: res.error, items: [], next: null, total: 0 });
+        } else {
+            const { data } = res;
+            CONV.error = null;
+            setText('conv-backend', data.backend || '—');
+            CONV.items = append ? CONV.items.concat(data.items || []) : (data.items || []);
+            CONV.total = data.total | 0;
+            CONV.next = data.next_before_id === undefined ? null : data.next_before_id;
+        }
+        renderConversations();
+    }
+
+    function refreshConversations() {
+        CONV.q = $('conv-search').value.trim();
+        return loadConversations(false);
+    }
+
+    function openConvDialog(r, opener) {
+        const body = $('conv-dialog-body');
+        body.replaceChildren();
+        $('conv-dialog-title').textContent = `Conversation #${r.id ?? ''}`;
+
+        const meta = (label, value) => h('div', null, h('dt', { text: label }), h('dd', null, value));
+        const thread = r.thread_id
+            ? h('button', {
+                type: 'button', class: 'link-btn', text: r.thread_id, title: 'Show only this thread',
+                on: { click: () => {
+                    $('conv-search').value = r.thread_id;
+                    closeDialog($('conv-dialog'));
+                    refreshConversations();
+                } },
+            })
+            : '—';
+        body.appendChild(h('dl', { class: 'conv-detail-meta' },
+            meta('Time', fmtDateTime(r.ts)),
+            meta('Thread', thread),
+            meta('Model', r.model || '—'),
+            meta('Embedding', `${r.embed_ms | 0} ms`),
+            meta('Answer', `${r.ai_ms | 0} ms`),
+            meta('Total', `${r.total_ms | 0} ms`),
+            meta('Tokens in / out', `${num(r.tokens_input)} / ${num(r.tokens_output)}`),
+            meta('Documents', String(r.doc_count | 0)),
+        ));
+        const block = (title, text) => h('section', { class: 'conv-detail-block' },
+            h('h3', null, title, h('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'Copy', 'aria-label': `Copy ${title.toLowerCase()}`, on: { click: () => copyText(text, title) } })),
+            h('pre', { class: 'conv-detail-text', text: text || '—' }));
+        body.append(block('Question', r.query || ''), block('Answer', r.answer || ''));
+        openDialog($('conv-dialog'), opener);
+    }
+
+    async function deleteConversation(id) {
+        if (!canMutate()) return;
+        if (!await confirmDialog(`Delete conversation #${id}?`, 'Delete')) return;
+        try {
+            const res = await api('/backend/api/conversations/' + encodeURIComponent(id), { method: 'DELETE' });
+            if (res.status === 401) { toast('Your session has expired. Sign in again.', false); return; }
+            if (!res.ok) throw new Error(`error ${res.status}`);
+            toast('Conversation deleted.');
+            refreshConversations();
+        } catch (err) {
+            toast(`Delete failed: ${err.message}`, false);
         }
     }
-    if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Start upload';
-    }
-    SOURCE_FILES = [];
-    const queue = document.getElementById('source-upload-queue');
-    if (queue) queue.hidden = true;
-    const input = document.getElementById('source-file-input');
-    if (input) input.value = '';
-    if (errors.length) showToast(`Upload completed with ${errors.length} error(s).`, false);
-    else showToast('Sources uploaded.');
-    refreshSources();
-}
 
-async function clearSources() {
-    if (isReadOnlyDemo()) {
-        showToast('Clear is disabled in the read-only demo.', false);
-        return;
-    }
-    if (!getAdminToken()) {
-        showToast('Private operator token required to clear sources.', false);
-        return;
-    }
-    if (!await confirmDialog('Delete ALL indexed sources? This cannot be undone.', 'Delete all')) return;
-    try {
-        const res = await fetch('/reset', { method: 'POST', headers: authHeaders() });
-        if (res.status === 401) {
-            showToast('Unauthorized. Check the operator token.', false);
-            return;
-        }
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        showToast(data.deleted !== undefined ? `Cleared ${data.deleted} points.` : 'Sources cleared.');
-        refreshSources();
-    } catch (e) {
-        showToast('Clear failed: ' + e.message, false);
-    }
-}
-
-async function optimizeSources(e, btnEl) {
-    if (isReadOnlyDemo()) {
-        showToast('Optimize is disabled in the read-only demo.', false);
-        return;
-    }
-    const btn = btnEl || (e && e.target && e.target.closest && e.target.closest('button'));
-    const original = btn ? btn.innerHTML : '';
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Optimizing...';
-    }
-    try {
-        const res = await fetch('/optimize', { method: 'POST', headers: authHeaders() });
-        if (res.status === 401) {
-            showToast('Unauthorized. Check the operator token.', false);
-            return;
-        }
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        showToast(data.message || 'Optimization triggered.');
-    } catch (e) {
-        showToast('Optimize failed: ' + e.message, false);
-    } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = original;
+    async function clearAllConversations() {
+        if (!canMutate()) return;
+        if (!await confirmDialog('Delete ALL conversations? This cannot be undone.', 'Delete all')) return;
+        try {
+            const res = await api('/backend/api/conversations', { method: 'DELETE' });
+            if (res.status === 401) { toast('Your session has expired. Sign in again.', false); return; }
+            if (!res.ok) throw new Error(`error ${res.status}`);
+            const data = await res.json().catch(() => ({}));
+            toast(`Deleted ${data.deleted ?? 0} conversation(s).`);
+            refreshConversations();
+        } catch (err) {
+            toast(`Delete failed: ${err.message}`, false);
         }
     }
-}
 
-function sourcesMessage(text, isError) {
-    return h('tr', null, h('td', { colspan: '5', class: 'sources-note', style: isError ? 'color:var(--danger);' : null, text }));
-}
+    // ---------- status tiles, metrics, models ----------
 
-async function refreshSources() {
-    const tbody = document.getElementById('sources-list');
-    if (!tbody) return;
-    const badge = document.getElementById('source-status-badge');
-    try {
-        const res = await fetch('/documents', { credentials: 'same-origin', headers: authHeaders() });
-        if (res.status === 401) {
-            tbody.replaceChildren(sourcesMessage(isReadOnlyDemo()
-                ? 'Operator access required — the source list is not available in the read-only demo.'
-                : (getAdminToken()
-                    ? 'Operator token rejected — re-save it in the Private operator token field.'
-                    : 'Operator token required — save it in the Private operator token field.')));
-            if (badge) { badge.textContent = 'token required'; badge.className = 'badge badge-txt'; }
-            return;
-        }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const docs = await res.json();
-        if (badge) {
-            badge.textContent = `${docs.length} source${docs.length === 1 ? '' : 's'}`;
-            badge.className = 'badge badge-csv';
-        }
-        if (docs.length === 0) {
-            tbody.replaceChildren(sourcesMessage('No indexed sources are visible yet.'));
-            return;
-        }
-        tbody.replaceChildren(...docs.map(sourceRow));
-    } catch (e) {
-        tbody.replaceChildren(sourcesMessage('Failed to load sources: ' + e.message, true));
+    const DOT_LABEL = { green: 'Healthy', yellow: 'Needs attention', red: 'Down' };
+
+    function setDot(id, color) {
+        const node = $(id);
+        if (!node) return;
+        node.className = 'tile-dot dot ' + (color === 'green' ? 'dot-ok' : color === 'yellow' ? 'dot-warn' : 'dot-bad');
+        node.setAttribute('aria-label', DOT_LABEL[color] || 'Status unknown');
     }
-}
 
-function sourceRow(d) {
-    let badgeClass = 'badge-txt';
-    if (d.type === 'PDF') badgeClass = 'badge-pdf';
-    if (d.type === 'DOCX') badgeClass = 'badge-docx';
-    if (d.type === 'CSV') badgeClass = 'badge-csv';
-    const view = h('button', {
-        class: 'btn btn-secondary btn-sm', title: 'View source', text: 'View',
-        onclick: () => viewSourceDocument(d.id, d.filename),
-    });
-    const actions = h('td', { class: 'actions-cell' });
-    if (isReadOnlyDemo()) {
-        actions.append(view, h('span', { class: 'locked-action', text: 'locked' }));
-    } else {
-        actions.append(h('button', {
-            class: 'btn btn-danger btn-sm', title: 'Delete source', text: 'Delete',
-            onclick: () => deleteSource(d.id),
-        }), view);
+    function setBar(id, pct) {
+        const node = $(id);
+        if (node) node.value = Math.max(0, Math.min(100, Number(pct) || 0));
     }
-    return h('tr', null,
-        h('td', { 'data-label': 'File' }, h('strong', { text: d.filename || d.id || '—' })),
-        h('td', { 'data-label': 'Type' }, h('span', { class: 'badge ' + badgeClass, text: d.type || '—' })),
-        h('td', { 'data-label': 'Indexed', text: d.uploaded_at ? fmtDateTime(d.uploaded_at) : 'N/A' }),
-        h('td', { 'data-label': 'Chunks', text: d.chunks === undefined || d.chunks === null ? '—' : String(d.chunks) }),
-        actions);
-}
 
-async function deleteSource(id) {
-    if (isReadOnlyDemo()) {
-        showToast('Delete is disabled in the read-only demo.', false);
-        return;
+    async function pollSystem() {
+        const s = await jget('/backend/api/system');
+        setText('tile-primary-model', s.model_primary);
+        setText('tile-fallback-model', s.model_fallback);
+        setText('tile-embed-model', s.embedding_model);
+        setText('tile-embed-dim', `${s.embedding_provider} · ${s.embedding_dim} dimensions`);
+        setText('tile-region', s.llm_provider);
+        const build = [s.git_sha ? `build ${String(s.git_sha).slice(0, 7)}` : null, s.uptime_seconds != null ? `up ${humanSeconds(s.uptime_seconds)}` : null].filter(Boolean);
+        setText('build-info', build.length ? build.join(' · ') : '—');
+        setText('runtime-provider', s.llm_provider);
+        setText('runtime-embed', truncate(s.embedding_model, 28));
+        setText('runtime-primary', truncate(s.model_primary, 28));
+        const pre = $('config-pre');
+        if (pre) pre.textContent = JSON.stringify(s.config, null, 2);
     }
-    if (!getAdminToken()) {
-        showToast('Private operator token required to delete sources.', false);
-        return;
-    }
-    if (!await confirmDialog('Delete this indexed source?')) return;
-    try {
-        const res = await fetch('/document/' + encodeURIComponent(id), { method: 'DELETE', headers: authHeaders() });
-        if (res.status === 401) {
-            showToast('Unauthorized. Check the operator token.', false);
-            return;
-        }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('Source deleted.');
-        refreshSources();
-    } catch (e) {
-        showToast('Delete failed: ' + e.message, false);
-    }
-}
 
-async function viewSourceDocument(id, filename) {
-    openSourceModal('Loading...', 'Fetching source...');
-    try {
-        let res = await fetch('/document/' + encodeURIComponent(id || filename), { headers: authHeaders() });
-        if (res.status === 401) {
-            openSourceModal('Operator token required', 'Save the operator token to view source content.');
-            return;
-        }
-        if (!res.ok && filename && id !== filename) {
-            res = await fetch('/document/' + encodeURIComponent(filename), { headers: authHeaders() });
-        }
-        if (!res.ok) throw new Error('Source not found');
-        const data = await res.json();
-        openSourceModal(data.filename || filename || id, data.text || '');
-    } catch (e) {
-        openSourceModal('Error', 'Could not load source content. ' + e.message);
-    }
-}
-
-function openSourceModal(title, text) {
-    document.getElementById('source-modal-title').textContent = title;
-    document.getElementById('source-modal-text').textContent = text;
-    document.getElementById('source-modal').classList.add('open');
-}
-
-function closeSourceModal() {
-    document.getElementById('source-modal').classList.remove('open');
-}
-
-document.getElementById('source-modal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'source-modal') closeSourceModal();
-});
-
-async function pollMetrics() {
-    const m = await jget('/backend/api/metrics');
-    const memoryMb = Number(m.memory_mb || 0);
-    const latencyMs = Number(m.avg_latency_ms || 0);
-    const cachePct = Number(m.cache_hit_ratio_pct || 0);
-    const requestsTotal = Number(m.requests_total || 0);
-
-    setText('m-memory', memoryMb.toFixed(0));
-    setText('m-latency', latencyMs.toFixed(0));
-    setText('m-cache', cachePct.toFixed(0));
-    setText('m-requests', requestsTotal.toLocaleString('en-GB'));
-    setText('tile-cache-ratio', `${m.cache_hit_ratio_pct}%`);
-    setText('tile-fallback-count', m.fallback_invocations);
-    setWidth('g-memory-bar', (memoryMb / 1024) * 100);
-    setWidth('g-latency-bar', (latencyMs / 3000) * 100);
-    setWidth('g-cache-bar', cachePct);
-    setSparkHeight('g-requests-bar', (Math.log10(requestsTotal + 1) / 3) * 100);
-    setText('g-memory-meta', `${memoryMb.toFixed(0)} MB of a 1 GB soft ceiling`);
-    setText('g-latency-meta', latencyMs > 3000 ? 'Above 3,000 ms target' : 'Target under 3,000 ms');
-    setText('g-cache-meta', `${cachePct.toFixed(0)}% prompt/model cache reuse`);
-    setText('g-requests-meta', `${requestsTotal.toLocaleString('en-GB')} handled requests`);
-
-    const rl = m.rate_limit || {};
-    const used = rl.tokens_used_today || 0;
-    const budget = rl.daily_token_budget || 0;
-    setText('tile-tokens-used', `${used.toLocaleString('en-GB')} / ${budget.toLocaleString('en-GB')}`);
-    setText('tile-budget-reset', fmtShort(rl.budget_resets_at));
-    setText('g-token-readout', `${used.toLocaleString('en-GB')} / ${budget.toLocaleString('en-GB')}`);
-    const budgetPct = budget > 0 ? (used / budget) * 100 : 0;
-    setWidth('g-token-bar', budgetPct);
-    setRing('g-token-ring', budgetPct);
-    setText('g-token-meta', `${clampPct(budgetPct).toFixed(0)}% used. Resets ${fmtShort(rl.budget_resets_at)}`);
-    let budgetColor = 'green';
-    if (budget > 0) {
-        const ratio = used / budget;
-        if (ratio > 0.95) budgetColor = 'red';
-        else if (ratio > 0.7) budgetColor = 'yellow';
-    }
-    setDot('tile-budget-dot', budgetColor);
-}
-
-async function pollModels() {
-    const data = await jget('/backend/api/models');
-    MODELS_STATE = data;
-    const primary = data.models.find(m => m.role === 'primary') || data.models[0];
-    const fallback = data.models.find(m => m.role === 'fallback');
-    setText('dd-primary-active', primary ? `${primary.label} — $${primary.input_per_m_usd}/$${primary.output_per_m_usd} per M` : 'unconfigured');
-    setText('dd-fallback-active', fallback ? `${fallback.label} — $${fallback.input_per_m_usd}/$${fallback.output_per_m_usd} per M` : 'unconfigured');
-    renderModelList('dd-primary-list', data.models, 'primary');
-    renderModelList('dd-fallback-list', data.models, 'fallback');
-}
-
-function renderModelList(id, models, activeRole) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.replaceChildren(...models.map(m => {
-        const active = m.role === activeRole;
-        const ctx = Number(m.context_window);
-        return h('div', { class: 'model-row' + (active ? ' active' : '') },
-            h('div', { class: 'model-row-name' },
-                m.label || '—',
-                active ? h('span', { class: 'model-role', text: 'ACTIVE' }) : null,
-                h('span', { style: 'font-size:0.7rem;color:#94a3b8;', text: `(${m.vendor || '—'})` })),
-            h('div', {
-                class: 'model-row-meta',
-                text: `$${m.input_per_m_usd}/M input · $${m.output_per_m_usd}/M output` +
-                    (Number.isFinite(ctx) ? ` · ${ctx.toLocaleString()} ctx` : ''),
-            }),
-            h('div', { class: 'model-row-desc', text: m.description || '' }));
-    }));
-}
-
-function toggleDropdown(which) {
-    const el = document.getElementById(`dd-${which}-list`);
-    if (el) el.hidden = !el.hidden;
-}
-
-// ---------- prompt playground ----------
-
-async function loadPrompt() {
-    try {
-        const p = await jget('/backend/api/prompt');
-        PROMPT_STATE = p;
-        const ta = document.getElementById('prompt-system');
-        if (ta && !ta.value) ta.value = p.system_prompt;
-        updatePreview();
-    } catch (e) {
-        console.warn('loadPrompt failed', e);
-    }
-}
-
-function updatePreview() {
-    if (!PROMPT_STATE) return;
-    const sys = document.getElementById('prompt-system').value;
-    const example = PROMPT_STATE.example_context;
-    const query = PROMPT_STATE.example_query;
-    const userMsg = `Konteksten:\n${example}\n\nSpørgsmål: ${query}`;
-    const preview = `system:\n${sys.slice(0, 500)}…\n\nuser:\n${userMsg}\n\n(JSON schema: ${PROMPT_STATE.schema.name}, strict=${PROMPT_STATE.schema.strict})`;
-    document.getElementById('prompt-preview').textContent = preview;
-}
-
-function importPrompt(ev) {
-    const file = ev.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-        document.getElementById('prompt-system').value = reader.result;
-        updatePreview();
+    const CONN_OK = {
+        qdrant: ['up'], gemini: ['up'], embedding_model: ['loaded', 'configured'],
+        logger: ['writing', 'stdout_only'], usage_db: ['up', 'memory_fallback'], chat_db: ['up', 'memory_fallback'],
     };
-    reader.readAsText(file);
-}
 
-function exportPrompt() {
-    const text = document.getElementById('prompt-system').value;
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'system-prompt.txt';
-    a.click();
-    URL.revokeObjectURL(url);
-}
+    async function pollConnections() {
+        const c = await jget('/backend/api/connections');
+        for (const [key, val] of Object.entries(c)) {
+            const chip = document.querySelector(`[data-conn="${key}"]`);
+            if (!chip) continue;
+            const good = (CONN_OK[key] || ['up']).includes(val.status);
+            const warn = !good && val.status === 'unconfigured';
+            chip.querySelector('.dot').className = 'dot ' + (good ? 'dot-ok' : warn ? 'dot-warn' : 'dot-bad');
+            chip.dataset.base = chip.dataset.base || chip.querySelector('.chip-label').textContent;
+            const suffix = (key === 'chat_db' && val.count != null) ? ` (${val.count})` : '';
+            chip.querySelector('.chip-label').textContent = chip.dataset.base + suffix;
+            chip.querySelector('.chip-state').textContent = good ? ': up' : warn ? ': not configured' : ': down';
+        }
+        setDot('tile-qdrant-dot', c.qdrant?.status === 'up' ? 'green' : 'red');
+        const points = c.qdrant?.points_count;
+        const label = typeof points === 'number' ? points.toLocaleString('en-GB') : (points ?? '—');
+        setText('tile-qdrant-points', label);
+        setText('runtime-qdrant-points', label);
+        setDot('tile-embed-dot', ['loaded', 'configured'].includes(c.embedding_model?.status) ? 'green' : 'yellow');
+        const gemini = c.gemini?.status === 'up' ? 'green' : (c.gemini?.status === 'unconfigured' ? 'yellow' : 'red');
+        setDot('tile-primary-dot', gemini);
+        setDot('tile-fallback-dot', gemini);
+    }
 
-// ---------- usage history charts ----------
+    async function pollMetrics() {
+        const m = await jget('/backend/api/metrics');
+        const memory = Number(m.memory_mb || 0);
+        const latency = Number(m.avg_latency_ms || 0);
+        const cache = Number(m.cache_hit_ratio_pct || 0);
+        const requests = Number(m.requests_total || 0);
 
-function ensureChart(id, label, color) {
-    if (CHARTS[id]) return CHARTS[id];
-    const ctx = document.getElementById(id);
-    if (!ctx) return null;
-    CHARTS[id] = new Chart(ctx, {
-        type: 'line',
-        data: { labels: [], datasets: [{
-            label, data: [], borderColor: color, backgroundColor: color + '33',
-            tension: 0.25, pointRadius: 0,
-        }]},
-        options: {
-            responsive: true, maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                x: { ticks: { color: '#94a3b8', maxRotation: 0 } },
-                y: { ticks: { color: '#94a3b8' }, beginAtZero: true },
+        setText('m-memory', memory.toFixed(0));
+        setText('m-latency', latency.toFixed(0));
+        setText('m-cache', cache.toFixed(0));
+        setText('m-requests', requests.toLocaleString('en-GB'));
+        setText('tile-cache-ratio', `${cache.toFixed(0)}%`);
+        setText('tile-fallback-count', m.fallback_invocations);
+        setBar('g-memory-bar', (memory / MEMORY_CEILING_MB) * 100);
+        setBar('g-latency-bar', (latency / LATENCY_TARGET_MS) * 100);
+        setBar('g-cache-bar', cache);
+        setText('g-memory-meta', `${memory.toFixed(0)} MB of a 1 GB soft ceiling`);
+        setText('g-latency-meta', latency > LATENCY_TARGET_MS ? 'Above the 3,000 ms target' : 'Target under 3,000 ms');
+        setText('g-cache-meta', `${cache.toFixed(0)}% of prompts served from cache`);
+
+        const rl = m.rate_limit || {};
+        const used = rl.tokens_used_today || 0;
+        const budget = rl.daily_token_budget || 0;
+        const pct = budget > 0 ? (used / budget) * 100 : 0;
+        setText('g-token-readout', `${num(used)} / ${num(budget)}`);
+        setBar('g-token-bar', pct);
+        setText('g-token-meta', `${Math.min(100, pct).toFixed(0)}% used. Resets ${fmtShort(rl.budget_resets_at)}`);
+    }
+
+    async function pollModels() {
+        const data = await jget('/backend/api/models');
+        const describe = (m) => (m ? `${m.label} — $${m.input_per_m_usd} / $${m.output_per_m_usd} per M tokens` : 'Not configured');
+        setText('dd-primary-active', describe(data.models.find((m) => m.role === 'primary') || data.models[0]));
+        setText('dd-fallback-active', describe(data.models.find((m) => m.role === 'fallback')));
+        renderModelList('dd-primary-list', data.models, 'primary');
+        renderModelList('dd-fallback-list', data.models, 'fallback');
+    }
+
+    function renderModelList(id, models, activeRole) {
+        $(id).replaceChildren(...models.map((m) => {
+            const active = m.role === activeRole;
+            const ctx = Number(m.context_window);
+            return h('div', { class: 'model-row' + (active ? ' active' : '') },
+                h('div', { class: 'model-row-name' }, m.label || '—',
+                    active ? h('span', { class: 'model-role', text: 'Active' }) : null,
+                    h('span', { class: 'model-vendor', text: m.vendor || '—' })),
+                h('div', { class: 'model-row-meta', text: `$${m.input_per_m_usd}/M input · $${m.output_per_m_usd}/M output` + (Number.isFinite(ctx) ? ` · ${ctx.toLocaleString('en-GB')} context` : '') }),
+                m.description ? h('div', { class: 'model-row-desc', text: m.description }) : null);
+        }));
+    }
+
+    function toggleDropdown(which, button) {
+        const list = $(`dd-${which}-list`);
+        list.hidden = !list.hidden;
+        button.setAttribute('aria-expanded', String(!list.hidden));
+    }
+
+    // ---------- sources ----------
+
+    let sourceFiles = [];
+
+    function showSourcesSignedOut() {
+        const tbody = $('sources-list');
+        if (!tbody) return;
+        tbody.replaceChildren(noteRow(5, 'Sign in as operator to view indexed sources.', { signIn: true }));
+        const badge = $('source-status-badge');
+        badge.textContent = 'Sign in to view';
+        badge.className = 'badge';
+    }
+
+    function sourceRow(d) {
+        const typeBadge = { PDF: 'badge-danger', DOCX: 'badge-accent', CSV: 'badge-success' }[d.type] || '';
+        const view = h('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'View', 'aria-label': `View ${d.filename || d.id}`, on: { click: (e) => viewSource(d.id, d.filename, e.currentTarget) } });
+        const actions = h('td', { class: 'actions-cell' }, view);
+        if (canMutate()) {
+            actions.append(h('button', { type: 'button', class: 'btn btn-danger btn-sm', text: 'Delete', 'aria-label': `Delete ${d.filename || d.id}`, on: { click: () => deleteSource(d.id) } }));
+        }
+        return h('tr', null,
+            h('td', { 'data-label': 'File' }, h('strong', { text: d.filename || d.id || '—' })),
+            h('td', { 'data-label': 'Type' }, h('span', { class: 'badge ' + typeBadge, text: d.type || '—' })),
+            h('td', { 'data-label': 'Indexed', text: d.uploaded_at ? fmtDateTime(d.uploaded_at) : 'N/A' }),
+            h('td', { class: 'num', 'data-label': 'Chunks', text: d.chunks === undefined || d.chunks === null ? '—' : String(d.chunks) }),
+            actions);
+    }
+
+    async function refreshSources() {
+        if (!STATE.authed) { showSourcesSignedOut(); return; }
+        const tbody = $('sources-list');
+        const badge = $('source-status-badge');
+        try {
+            const res = await api('/documents');
+            if (res.status === 401) return; // setAuth(false) already rendered the sign-in prompt
+            if (!res.ok) throw new Error(`error ${res.status}`);
+            const docs = await res.json();
+            badge.textContent = `${docs.length} source${docs.length === 1 ? '' : 's'}`;
+            badge.className = 'badge badge-success';
+            tbody.replaceChildren(...(docs.length ? docs.map(sourceRow) : [noteRow(5, 'No sources have been indexed yet.')]));
+        } catch (err) {
+            console.warn('Loading sources failed', err);
+            badge.textContent = 'Error';
+            badge.className = 'badge badge-danger';
+            tbody.replaceChildren(noteRow(5, `Could not load sources: ${err.message}`, { error: true }));
+        }
+    }
+
+    function addSourcesToQueue(files) {
+        sourceFiles = files;
+        $('source-file-list').innerHTML = files.map((f) => `<li>${escapeHtml(f.name)} (${(f.size / 1024).toFixed(1)} KB)</li>`).join('');
+        $('source-upload-queue').hidden = files.length === 0;
+        $('source-upload-progress').textContent = '';
+    }
+
+    async function uploadSources() {
+        if (!canMutate() || sourceFiles.length === 0) return;
+        const btn = $('source-upload-btn');
+        const progress = $('source-upload-progress');
+        btn.disabled = true;
+        const failures = [];
+        for (let i = 0; i < sourceFiles.length; i++) {
+            const file = sourceFiles[i];
+            progress.textContent = `Uploading ${i + 1} of ${sourceFiles.length}: ${file.name}`;
+            const form = new FormData();
+            form.append('file', file);
+            try {
+                const res = await api('/upload', { method: 'POST', body: form, timeout: 180_000 });
+                if (res.status === 401) { failures.push(`${file.name}: session expired`); break; }
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    failures.push(`${file.name}: ${data.error || `error ${res.status}`}`);
+                }
+            } catch (err) {
+                failures.push(`${file.name}: ${err.message}`);
+            }
+        }
+        btn.disabled = false;
+        const total = sourceFiles.length;
+        sourceFiles = [];
+        $('source-file-input').value = '';
+        $('source-upload-queue').hidden = true;
+        progress.textContent = failures.length ? `Failed: ${failures.join('; ')}` : '';
+        if (failures.length) toast(`${failures.length} of ${total} upload(s) failed.`, false);
+        else toast(total === 1 ? 'Source uploaded.' : `${total} sources uploaded.`);
+        refreshSources();
+    }
+
+    async function clearSources() {
+        if (!canMutate()) return;
+        if (!await confirmDialog('Delete ALL indexed sources? This cannot be undone.', 'Delete all')) return;
+        try {
+            const res = await api('/reset', { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 401) { toast('Your session has expired. Sign in again.', false); return; }
+            if (!res.ok) throw new Error(data.error || `error ${res.status}`);
+            toast(data.deleted !== undefined ? `Cleared ${data.deleted} points.` : 'Sources cleared.');
+            refreshSources();
+        } catch (err) {
+            toast(`Clear failed: ${err.message}`, false);
+        }
+    }
+
+    async function optimizeSources(button) {
+        if (!canMutate()) return;
+        const label = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Optimizing…';
+        try {
+            const res = await api('/optimize', { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 401) { toast('Your session has expired. Sign in again.', false); return; }
+            if (!res.ok) throw new Error(data.error || `error ${res.status}`);
+            toast(data.message || 'Optimization started.');
+        } catch (err) {
+            toast(`Optimize failed: ${err.message}`, false);
+        } finally {
+            button.disabled = false;
+            button.textContent = label;
+        }
+    }
+
+    async function deleteSource(id) {
+        if (!canMutate()) return;
+        if (!await confirmDialog('Delete this indexed source?', 'Delete')) return;
+        try {
+            const res = await api('/document/' + encodeURIComponent(id), { method: 'DELETE' });
+            if (res.status === 401) { toast('Your session has expired. Sign in again.', false); return; }
+            if (!res.ok) throw new Error(`error ${res.status}`);
+            toast('Source deleted.');
+            refreshSources();
+        } catch (err) {
+            toast(`Delete failed: ${err.message}`, false);
+        }
+    }
+
+    function showSourceDialog(title, text, opener) {
+        $('source-dialog-title').textContent = title;
+        $('source-dialog-text').textContent = text;
+        openDialog($('source-dialog'), opener);
+    }
+
+    async function viewSource(id, filename, opener) {
+        showSourceDialog(filename || id || 'Source', 'Loading…', opener);
+        try {
+            let res = await api('/document/' + encodeURIComponent(id || filename));
+            if (!res.ok && filename && id !== filename) res = await api('/document/' + encodeURIComponent(filename));
+            if (res.status === 401) { closeDialog($('source-dialog')); return; }
+            if (!res.ok) throw new Error('Source not found');
+            const data = await res.json();
+            showSourceDialog(data.filename || filename || id, data.text || '', opener);
+        } catch (err) {
+            $('source-dialog-text').textContent = `Could not load this source. ${err.message}`;
+        }
+    }
+
+    // ---------- prompt ----------
+
+    let promptState = null;
+
+    async function loadPrompt() {
+        try {
+            promptState = await jget('/backend/api/prompt');
+            const area = $('prompt-system');
+            if (!area.value) area.value = promptState.system_prompt;
+            updatePreview();
+        } catch (err) {
+            console.warn('Loading the prompt failed', err);
+            $('prompt-preview').textContent = 'The prompt is not available right now.';
+        }
+    }
+
+    function updatePreview() {
+        if (!promptState) return;
+        const system = $('prompt-system').value;
+        const user = `Konteksten:\n${promptState.example_context}\n\nSpørgsmål: ${promptState.example_query}`;
+        $('prompt-preview').textContent =
+            `system:\n${system.slice(0, 500)}${system.length > 500 ? '…' : ''}\n\nuser:\n${user}\n\n(JSON schema: ${promptState.schema.name}, strict=${promptState.schema.strict})`;
+    }
+
+    function importPrompt(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => { $('prompt-system').value = reader.result; updatePreview(); };
+        reader.readAsText(file);
+        e.target.value = '';
+    }
+
+    function exportPrompt() {
+        const url = URL.createObjectURL(new Blob([$('prompt-system').value], { type: 'text/plain' }));
+        const link = h('a', { href: url, download: 'system-prompt.txt' });
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // ---------- usage charts (colours follow the CSS tokens, light and dark) ----------
+
+    const CHARTS = {};
+    const CHART_SERIES = {
+        'chart-requests': { label: 'Requests', token: '--chart-1' },
+        'chart-tokens': { label: 'Tokens', token: '--chart-2' },
+        'chart-cache': { label: 'Cache hit %', token: '--chart-3' },
+        'chart-fallback': { label: 'Fallback %', token: '--chart-4' },
+    };
+    const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+    function styleChart(chart, token) {
+        const color = cssVar(token);
+        const dataset = chart.data.datasets[0];
+        dataset.borderColor = color;
+        dataset.backgroundColor = color + '33';
+        for (const axis of ['x', 'y']) {
+            chart.options.scales[axis].ticks.color = cssVar('--ink-mute');
+            chart.options.scales[axis].grid.color = cssVar('--rule');
+        }
+    }
+
+    function ensureChart(id) {
+        if (CHARTS[id]) return CHARTS[id];
+        const canvas = $(id);
+        if (!canvas || !window.Chart) return null;
+        const { label, token } = CHART_SERIES[id];
+        window.Chart.defaults.font.family = cssVar('--sans');
+        CHARTS[id] = new window.Chart(canvas, {
+            type: 'line',
+            data: { labels: [], datasets: [{ label, data: [], fill: true, tension: 0.25, pointRadius: 0 }] },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 6 }, grid: {} },
+                    y: { ticks: {}, grid: {}, beginAtZero: true },
+                },
             },
-        },
-    });
-    return CHARTS[id];
-}
-
-async function pollUsage() {
-    const summary = await jget('/backend/api/usage/summary');
-    document.getElementById('usage-backend').textContent = summary.backend || '—';
-    const sumText = `Last 24h: ${summary.req_24h ?? 0} requests, ${(summary.tok_in_24h||0).toLocaleString()} input + ${(summary.tok_out_24h||0).toLocaleString()} output tokens, ${summary.errors_24h ?? 0} errors. Last 7d: ${summary.req_7d ?? 0} requests.`;
-    document.getElementById('usage-summary').textContent = sumText;
-
-    const [req, tok, cache, fb] = await Promise.all([
-        jget('/backend/api/usage/timeseries?metric=requests&range=24h'),
-        jget('/backend/api/usage/timeseries?metric=tokens&range=24h'),
-        jget('/backend/api/usage/timeseries?metric=cache_hit_ratio&range=7d'),
-        jget('/backend/api/usage/timeseries?metric=fallback_rate&range=7d'),
-    ]);
-
-    applyToChart('chart-requests', 'Requests', '#3b82f6', req.series);
-    applyToChart('chart-tokens', 'Tokens', '#10b981', tok.series);
-    applyToChart('chart-cache', 'Cache-hit %', '#f59e0b', cache.series);
-    applyToChart('chart-fallback', 'Fallback %', '#ef4444', fb.series);
-}
-
-function applyToChart(id, label, color, series) {
-    const c = ensureChart(id, label, color);
-    if (!c) return;
-    const wrap = c.canvas.parentElement;
-    let empty = wrap.querySelector('.chart-empty');
-    if (!series || series.length === 0) {
-        if (!empty) wrap.appendChild(h('div', { class: 'chart-empty', text: 'No data for this period yet.' }));
-        series = [];
-    } else if (empty) {
-        empty.remove();
+        });
+        styleChart(CHARTS[id], token);
+        CHARTS[id].update('none');
+        return CHARTS[id];
     }
-    c.data.labels = series.map(p => fmtShort(p.ts));
-    c.data.datasets[0].data = series.map(p => p.value);
-    c.update('none');
-}
 
-// ---------- poll scheduler ----------
-// One tick loop for every poller: skips while the tab is hidden, never overlaps a
-// poller with itself, and surfaces failures as a header "stale since" indicator.
-
-const POLLERS = [
-    { name: 'system',      fn: pollSystem,      every: SYS_POLL_MS },
-    { name: 'connections', fn: pollConnections, every: CONN_POLL_MS },
-    { name: 'metrics',     fn: pollMetrics,     every: METRICS_POLL_MS },
-    { name: 'usage',       fn: pollUsage,       every: USAGE_POLL_MS },
-    { name: 'models',      fn: pollModels,      every: Infinity }, // once; retried only after a failure
-].map(p => ({ ...p, running: false, last: 0, failedSince: null }));
-
-const POLL_RETRY_MS = 30_000;
-
-function updateStaleIndicator() {
-    const el = document.getElementById('stale-indicator');
-    if (!el) return;
-    const failed = POLLERS.filter(p => p.failedSince).map(p => p.failedSince);
-    if (failed.length === 0) { el.hidden = true; return; }
-    const since = new Date(Math.min(...failed.map(d => d.getTime())));
-    const names = POLLERS.filter(p => p.failedSince).map(p => p.name).join(', ');
-    el.textContent = `⚠ stale since ${_pad2(since.getHours())}:${_pad2(since.getMinutes())}`;
-    el.title = `Failing: ${names}`;
-    el.hidden = false;
-}
-
-async function runPoller(p) {
-    if (p.running) return;
-    p.running = true;
-    p.last = Date.now();
-    try {
-        await p.fn();
-        p.failedSince = null;
-    } catch (e) {
-        console.warn(`poll ${p.name} failed`, e);
-        if (!p.failedSince) p.failedSince = new Date();
-    } finally {
-        p.running = false;
-        updateStaleIndicator();
+    function applyToChart(id, series) {
+        const chart = ensureChart(id);
+        if (!chart) return;
+        const wrap = chart.canvas.parentElement;
+        const empty = wrap.querySelector('.chart-empty');
+        const points = series || [];
+        if (points.length === 0) {
+            if (!empty) wrap.appendChild(h('div', { class: 'chart-empty', text: 'No data for this period yet.' }));
+        } else if (empty) {
+            empty.remove();
+        }
+        chart.data.labels = points.map((p) => fmtShort(p.ts));
+        chart.data.datasets[0].data = points.map((p) => p.value);
+        chart.update('none');
     }
-}
 
-function pollTick() {
-    if (document.hidden) return;
-    const now = Date.now();
-    POLLERS.forEach(p => {
-        const interval = p.failedSince ? Math.min(p.every, POLL_RETRY_MS) : p.every;
-        if (p.last === 0 || now - p.last >= interval) runPoller(p);
+    async function pollUsage() {
+        const s = await jget('/backend/api/usage/summary');
+        setText('usage-backend', s.backend);
+        $('usage-summary').textContent =
+            `Last 24 h: ${num(s.req_24h)} requests, ${num(s.tok_in_24h)} input and ${num(s.tok_out_24h)} output tokens, ${num(s.errors_24h)} errors. Last 7 days: ${num(s.req_7d)} requests.`;
+        const [req, tok, cache, fallback] = await Promise.all([
+            jget('/backend/api/usage/timeseries?metric=requests&range=24h'),
+            jget('/backend/api/usage/timeseries?metric=tokens&range=24h'),
+            jget('/backend/api/usage/timeseries?metric=cache_hit_ratio&range=7d'),
+            jget('/backend/api/usage/timeseries?metric=fallback_rate&range=7d'),
+        ]);
+        applyToChart('chart-requests', req.series);
+        applyToChart('chart-tokens', tok.series);
+        applyToChart('chart-cache', cache.series);
+        applyToChart('chart-fallback', fallback.series);
+    }
+
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+        for (const [id, chart] of Object.entries(CHARTS)) {
+            styleChart(chart, CHART_SERIES[id].token);
+            chart.update('none');
+        }
     });
-}
 
-// ---------- bootstrap ----------
+    // ---------- poll scheduler ----------
+    // One tick loop: skips while the tab is hidden, never overlaps a poller with itself,
+    // and shows a "stale since" chip when a poller keeps failing.
 
-// Static markup carries data-* attributes instead of inline on*= handlers (CSP: no inline JS).
-const ACTIONS = {
-    'optimize-sources': (e, el) => optimizeSources(e, el),
-    'clear-sources': () => clearSources(),
-    'refresh-sources': () => refreshSources(),
-    'pick-source-file': () => document.getElementById('source-file-input').click(),
-    'upload-sources': () => uploadSources(),
-    'save-operator-token': () => saveOperatorToken(),
-    'toggle-dropdown': (e, el) => toggleDropdown(el.dataset.dropdown),
-    'pick-prompt-file': () => document.getElementById('prompt-import').click(),
-    'export-prompt': () => exportPrompt(),
-    'update-preview': () => updatePreview(),
-    'refresh-conversations': () => refreshConversations(),
-    'clear-conversations': () => clearAllConversations(),
-    'load-more-conversations': () => loadMoreConversations(),
-    'close-source-modal': () => closeSourceModal(),
-    'close-conv-modal': () => closeConvModal(),
-};
+    const POLLERS = [
+        { name: 'system', fn: pollSystem, every: POLL.system },
+        { name: 'connections', fn: pollConnections, every: POLL.connections },
+        { name: 'metrics', fn: pollMetrics, every: POLL.metrics },
+        { name: 'usage', fn: pollUsage, every: POLL.usage },
+        { name: 'models', fn: pollModels, every: Infinity }, // once, retried only after a failure
+    ].map((p) => ({ ...p, running: false, last: 0, failedSince: null }));
 
-function initActionHandlers() {
-    document.addEventListener('click', (e) => {
-        const tab = e.target.closest('.bk-tab[data-tab]');
-        if (tab) { setTab(tab.dataset.tab); return; }
-        const el = e.target.closest('[data-action]');
-        const fn = el && ACTIONS[el.dataset.action];
-        if (fn) fn(e, el);
-    });
-    document.getElementById('source-file-input')?.addEventListener('change', handleSourceFileSelect);
-    document.getElementById('prompt-import')?.addEventListener('change', importPrompt);
-}
+    function updateStaleIndicator() {
+        const chip = $('stale-indicator');
+        const failing = POLLERS.filter((p) => p.failedSince);
+        if (failing.length === 0) { chip.hidden = true; return; }
+        const since = new Date(Math.min(...failing.map((p) => p.failedSince.getTime())));
+        chip.textContent = `Data may be stale since ${pad2(since.getHours())}:${pad2(since.getMinutes())}`;
+        chip.title = `Failing: ${failing.map((p) => p.name).join(', ')}`;
+        chip.hidden = false;
+    }
 
-async function bootstrap() {
-    initActionHandlers();
-    initSourceControls();
-    initConversationControls();
-    updateConvChrome();
-    // Prompt playground depends on nothing polled; run it alongside the first tick.
-    loadPrompt();
-    refreshSources();
-    pollTick();
-    setInterval(pollTick, 1000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTick(); });
-}
+    async function runPoller(p) {
+        if (p.running) return;
+        p.running = true;
+        p.last = Date.now();
+        try {
+            await p.fn();
+            p.failedSince = null;
+        } catch (err) {
+            console.warn(`Polling ${p.name} failed`, err);
+            if (!p.failedSince) p.failedSince = new Date();
+        } finally {
+            p.running = false;
+            updateStaleIndicator();
+        }
+    }
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bootstrap);
-} else {
+    function pollTick() {
+        if (document.hidden) return;
+        const now = Date.now();
+        for (const p of POLLERS) {
+            const interval = p.failedSince ? Math.min(p.every, POLL.retry) : p.every;
+            if (p.last === 0 || now - p.last >= interval) runPoller(p);
+        }
+    }
+
+    // ---------- wiring ----------
+
+    const ACTIONS = {
+        'open-login': (e, el) => openLogin(el),
+        'logout': () => logout(),
+        'optimize-sources': (e, el) => optimizeSources(el),
+        'clear-sources': () => clearSources(),
+        'refresh-sources': () => refreshSources(),
+        'pick-source-file': () => $('source-file-input').click(),
+        'upload-sources': () => uploadSources(),
+        'toggle-dropdown': (e, el) => toggleDropdown(el.dataset.dropdown, el),
+        'pick-prompt-file': () => $('prompt-import').click(),
+        'export-prompt': () => exportPrompt(),
+        'update-preview': () => updatePreview(),
+        'refresh-conversations': () => refreshConversations(),
+        'clear-conversations': () => clearAllConversations(),
+        'load-more-conversations': () => { if (CONV.next !== null && !CONV.loading) loadConversations(true); },
+    };
+
+    function initSourceDropZone() {
+        const zone = $('source-drop-zone');
+        const input = $('source-file-input');
+        if (!zone || !input) return;
+        input.addEventListener('change', (e) => { addSourcesToQueue(Array.from(e.target.files || [])); e.target.value = ''; });
+        zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
+        zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+        zone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            zone.classList.remove('dragover');
+            if (e.dataTransfer && e.dataTransfer.files.length) addSourcesToQueue(Array.from(e.dataTransfer.files));
+        });
+    }
+
+    function bootstrap() {
+        document.addEventListener('click', (e) => {
+            const tab = e.target.closest('.bk-tab');
+            if (tab) { setTab(tab.dataset.tab); return; }
+            const el = e.target.closest('[data-action]');
+            const fn = el && ACTIONS[el.dataset.action];
+            if (fn) fn(e, el);
+        });
+        document.querySelector('.bk-tabs').addEventListener('keydown', onTabKeydown);
+        $('login-form').addEventListener('submit', submitLogin);
+        $('prompt-import').addEventListener('change', importPrompt);
+        $('prompt-system').addEventListener('input', updatePreview);
+
+        let searchTimer = null;
+        const search = $('conv-search');
+        search.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(refreshConversations, 300); });
+        search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(searchTimer); refreshConversations(); } });
+
+        initSourceDropZone();
+        showSourcesSignedOut();
+        renderConversations();
+        checkSession();
+        loadPrompt();
+        pollTick();
+        setInterval(pollTick, 1000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTick(); });
+    }
+
     bootstrap();
-}
+})();

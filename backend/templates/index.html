@@ -2,191 +2,173 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Helios — Internal AI Assistant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Helios — AI support assistant</title>
+    <meta name="description" content="Helios is a retrieval-augmented AI assistant that answers IT and policy questions from a knowledge base and shows the sources behind every answer.">
+    <meta name="theme-color" content="#14171C">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Helios — AI support assistant">
+    <meta property="og:description" content="Ask questions and get answers grounded in a knowledge base, with the sources behind every answer.">
+    <meta property="og:site_name" content="Helios">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
-    <link rel="stylesheet" href="/static/styles.css?v={{ asset_v }}">
+    <link rel="preload" href="/static/fonts/instrument-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/fonts/instrument-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="/static/fonts.css?v={{ asset_v }}">
-    <script defer src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js" integrity="sha384-YTBHtsL8yVTHcLakYNyrOfK3K+QQcXiECuaALJ+3j7Mo681Rtzadt8NR6WrZH+eQ" crossorigin="anonymous"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="/static/styles.css?v={{ asset_v }}">
+    <script defer src="/static/vendor/marked.min.js?v={{ asset_v }}"></script>
+    <script defer src="/static/vendor/purify.min.js?v={{ asset_v }}"></script>
+    <script defer src="/static/common.js?v={{ asset_v }}"></script>
+    <script defer src="/static/chat.js?v={{ asset_v }}"></script>
 </head>
 <body>
-    <button class="menu-toggle" aria-label="Open menu" data-action="toggle-sidebar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
-    </button>
-    <div class="sidebar-backdrop"></div>
+    <a class="skip-link" href="#query-input">Skip to message box</a>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
     <div class="app-container">
-        <!-- Sidebar -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar" aria-label="Sidebar">
             <div class="brand">
-                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg class="brand-mark" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <circle cx="12" cy="12" r="4" stroke-width="2"/>
                     <path stroke-linecap="round" stroke-width="2" d="M12 2v3M12 19v3M2 12h3M19 12h3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/>
                 </svg>
                 <span>Helios</span>
-                <span class="brand-env">{% if demo_mode %}Demo{% else %}Internal{% endif %}</span>
+                {% if demo_mode %}<span class="badge">Demo</span>{% endif %}
             </div>
 
-            <button class="new-chat-btn" data-action="new-conversation">
-                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <button type="button" class="new-chat-btn" data-action="new-conversation">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                 </svg>
                 New conversation
-                <kbd>⌘K</kbd>
+                <kbd id="new-chat-kbd" aria-hidden="true">Ctrl K</kbd>
             </button>
 
-            <nav>
-                <div class="nav-section-label">Workspace</div>
-                <div class="nav-item active" data-view="chat" id="nav-chat">
-                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                    </svg>
-                    Assistant
-                </div>
-                <a class="nav-item" href="/backend">
-                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                    </svg>
-                    Operations Console
-                </a>
+            <nav aria-label="Primary">
+                <p class="nav-label">Workspace</p>
+                <ul class="nav-list">
+                    <li>
+                        <a class="nav-item" href="/" aria-current="page">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+                            </svg>
+                            Assistant
+                        </a>
+                    </li>
+                    <li>
+                        <a class="nav-item" href="/backend">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                            </svg>
+                            Console
+                        </a>
+                    </li>
+                </ul>
             </nav>
 
-            <div class="side-status" id="side-status" aria-live="polite">
-                <div class="side-status-title">System status</div>
-                <div class="side-status-row">
-                    <span>Engine</span>
-                    <span class="value" data-status="engine">—</span>
-                </div>
-                <div class="side-status-row">
-                    <span>Vector index</span>
-                    <span class="value" data-status="qdrant">—</span>
-                </div>
-                <div class="side-status-row">
-                    <span>Service</span>
-                    <span class="value" style="display:inline-flex;align-items:center;gap:6px">
-                        <span class="status-dot pulse" id="health-dot"></span>
-                        <span data-status="overall">checking…</span>
-                    </span>
-                </div>
-            </div>
+            <section class="side-status" aria-labelledby="side-status-title">
+                <h2 id="side-status-title">System status</h2>
+                <dl>
+                    <div><dt>Answers</dt><dd data-status="engine">—</dd></div>
+                    <div><dt>Search index</dt><dd data-status="qdrant">—</dd></div>
+                    <div>
+                        <dt>Service</dt>
+                        <dd><span class="dot dot-pulse" id="health-dot" aria-hidden="true"></span><span data-status="overall">Checking…</span></dd>
+                    </div>
+                </dl>
+            </section>
 
-            <div class="gdpr-sidebar">
-                <div class="gdpr-sidebar-title">Helios · RAG over internal docs</div>
-            </div>
+            <p class="sidebar-foot">Helios · retrieval-augmented support assistant</p>
         </aside>
 
-        <!-- Main Content -->
-        <main class="main-content">
-            <div class="top-nav" role="navigation" aria-label="Mobile navigation">
-                <div class="nav-item" data-view="chat" id="nav-chat-mobile">Assistant</div>
-            </div>
-
+        <div class="main-content">
             <header class="page-header">
-                <span class="page-title">Support Assistant</span>
-                <span class="page-sub">Answers grounded in your internal knowledge base</span>
+                <button type="button" class="btn btn-ghost btn-icon menu-toggle" id="menu-toggle"
+                        aria-label="Open menu" aria-controls="sidebar" aria-expanded="false" data-action="toggle-sidebar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+                </button>
+                <h1 class="page-title">Helios Assistant</h1>
+                <span class="page-sub">Answers grounded in a knowledge base</span>
                 <div class="header-right">
-                    {% if locked %}<span class="env-chip">Read-only demo</span>{% endif %}
                     <span class="health-pill">
-                        <span class="status-dot pulse" id="header-health-dot"></span>
-                        <span id="header-health-text">connecting</span>
+                        <span class="dot dot-pulse" id="header-health-dot" aria-hidden="true"></span>
+                        <span class="health-text" id="header-health-text">Connecting…</span>
                     </span>
                 </div>
             </header>
 
-            {% if demo_mode %}
-            <div id="demo-banner" class="demo-banner">
-                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span>Demo Mode — No active LLM connection. Results are simulated.</span>
-            </div>
-            {% endif %}
-            {% if locked %}
-            <div id="readonly-banner" class="readonly-banner">
-                <span class="readonly-kicker">READ ONLY</span>
-                <span>Public demo lock is active. You can ask questions and inspect the backend, but uploads, deletes, and model changes are disabled.</span>
-            </div>
+            {% if demo_mode or locked %}
+            <p class="notice page-notice" role="note">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>
+                    {% if demo_mode %}<strong>Demo mode.</strong> No live AI model is connected, so answers are simulated from sample documents.{% else %}<strong>Read-only.</strong>{% endif %}
+                    {% if locked %}Uploads, deletes and model changes are disabled.{% endif %}
+                </span>
+            </p>
             {% endif %}
 
-            <!-- Chat View -->
-            <div id="view-chat" class="view active">
-                <div class="chat-container">
-                    <div class="chat-history" id="chat-history">
-                        <section id="welcome-hero" class="welcome-hero">
-                            <div class="welcome-kicker">Helios · Internal Support Agent</div>
-                            <h1>How can I help you <em>today</em>?</h1>
+                <div class="chat-history" id="chat-history" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation" tabindex="0">
+                    <div class="chat-column" id="chat-thread">
+                        <section id="welcome-hero" class="welcome-hero" aria-labelledby="welcome-title">
+                            <p class="welcome-kicker">Support assistant</p>
+                            <h2 id="welcome-title">How can I help you <em>today</em>?</h2>
                             <p>{{ welcome_prompt|trim }}</p>
                             <div class="welcome-suggestions">
                                 <button type="button" class="suggestion" data-suggestion="What can this support assistant help me with?">
-                                    <span class="sug-dot"></span>
                                     <span>What can this support assistant help me with?</span>
-                                    <span class="sug-arrow">→</span>
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-6-6l6 6-6 6"/></svg>
                                 </button>
-                                <button type="button" class="suggestion" data-suggestion="Hvilke kilder bruger svaret, og hvor sikre er matches?">
-                                    <span class="sug-dot"></span>
+                                <button type="button" class="suggestion" lang="da" data-suggestion="Hvilke kilder bruger svaret, og hvor sikre er matches?">
                                     <span>Hvilke kilder bruger svaret, og hvor sikre er matches?</span>
-                                    <span class="sug-arrow">→</span>
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-6-6l6 6-6 6"/></svg>
                                 </button>
                                 <button type="button" class="suggestion" data-suggestion="Show me how the RAG pipeline handles a policy question.">
-                                    <span class="sug-dot"></span>
                                     <span>Show me how the RAG pipeline handles a policy question.</span>
-                                    <span class="sug-arrow">→</span>
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-6-6l6 6-6 6"/></svg>
                                 </button>
-                                <button type="button" class="suggestion" data-suggestion="Fortæl kort hvordan dokumenterne bliver brugt i svaret.">
-                                    <span class="sug-dot"></span>
+                                <button type="button" class="suggestion" lang="da" data-suggestion="Fortæl kort hvordan dokumenterne bliver brugt i svaret.">
                                     <span>Fortæl kort hvordan dokumenterne bliver brugt i svaret.</span>
-                                    <span class="sug-arrow">→</span>
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-6-6l6 6-6 6"/></svg>
                                 </button>
                             </div>
                         </section>
                     </div>
+                </div>
 
-                    <div class="input-zone">
-                        <div id="chat-attachments" class="chat-attachments" hidden></div>
-                        <div class="input-area">
-                            <textarea id="query-input" placeholder="Ask about IT, policies, troubleshooting…" rows="1"></textarea>
-                            <input type="file" id="chat-file-input" multiple style="display:none"
-                                   accept=".png,.jpg,.jpeg,.webp,.gif" />
-                            <button data-action="attach-image"
-                                    id="attach-btn" class="icon-btn" title="Attach an image for analysis">
-                                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                          d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                                </svg>
-                            </button>
-                            <button id="send-btn" class="send-btn" title="Send (Enter)">
-                                <span id="send-icon">
-                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                                    </svg>
-                                </span>
-                                <span id="send-spinner" class="spinner" style="display:none"></span>
-                            </button>
-                        </div>
-                        <div class="composer-hint">
-                            <span class="hint-keys"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</span>
-                            <span>Responses are AI-generated — verify critical information.</span>
-                        </div>
+                <div class="input-zone">
+                    <div id="chat-attachments" class="chat-attachments" role="list" aria-label="Attached images" hidden></div>
+                    <div class="input-area">
+                        <textarea id="query-input" rows="1" aria-label="Message Helios"
+                                  placeholder="Ask about IT, policies, troubleshooting…"></textarea>
+                        <input type="file" id="chat-file-input" multiple hidden accept=".png,.jpg,.jpeg,.webp">
+                        <button type="button" id="attach-btn" class="btn btn-ghost btn-icon" data-action="attach-image"
+                                aria-label="Attach an image" title="Attach an image">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+                            </svg>
+                        </button>
+                        <button type="button" id="send-btn" class="send-btn" aria-label="Send message" title="Send message">
+                            <svg id="send-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                            <span id="send-spinner" class="spinner" aria-hidden="true" hidden></span>
+                        </button>
+                    </div>
+                    <div class="composer-hint">
+                        <span class="hint-keys"><kbd>Enter</kbd> to send · <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</span>
+                        <p>AI-generated answers can be wrong. Check anything important against the sources.</p>
                     </div>
                 </div>
-            </div>
-        </main>
-    </div>
-
-    <!-- Document Modal -->
-    <div id="doc-modal" class="modal-backdrop">
-        <div class="modal-panel">
-            <div class="modal-header">
-                <span id="modal-title">Document Viewer</span>
-                <button data-action="close-modal" class="close-btn">&times;</button>
-            </div>
-            <div class="modal-body" id="modal-text"></div>
+            </main>
         </div>
     </div>
 
-    <script src="/static/chat.js?v={{ asset_v }}"></script>
-
+    <dialog id="doc-dialog" class="dialog" aria-labelledby="doc-dialog-title">
+        <div class="dialog-header">
+            <h2 id="doc-dialog-title">Source excerpts</h2>
+            <button type="button" class="btn btn-ghost btn-icon" data-close-dialog aria-label="Close">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-width="2" d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+        </div>
+        <div class="dialog-body" id="doc-dialog-text" tabindex="0"></div>
+    </dialog>
 </body>
 </html>
